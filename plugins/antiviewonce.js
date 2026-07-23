@@ -1,14 +1,20 @@
 /**
  * ANTI VIEW-ONCE — saves view-once media and lets owner reveal it with .vv
+ * Toggle: .antiviewonce on | .antiviewonce off
  */
 
 import { downloadMediaMessage } from '@whiskeysockets/baileys';
 import pino from 'pino';
+import config from '../config.js';
 import { isOwner, reply } from '../lib/utils.js';
+
+// Runtime toggle (starts from env config)
+let enabled = config.ANTI_VIEW_ONCE;
 
 const voStore = new Map(); // chat_jid → msg
 
 export function storeViewOnce(msg) {
+  if (!enabled) return;
   const m = msg.message;
   if (!m) return;
 
@@ -52,6 +58,25 @@ export async function handleVV(sock, msg, parsed) {
     voStore.delete(jid);
   } catch (err) {
     await reply(sock, msg, `❌ Could not reveal media: ${err.message}`);
+  }
+  return true;
+}
+
+// ── Toggle command ─────────────────────────────────────────────────────────────
+export async function handleAntiViewOnceCommand(sock, msg, parsed) {
+  if (parsed?.command !== 'antiviewonce') return false;
+  if (!isOwner(msg)) { await reply(sock, msg, '🔒 Owner only.'); return true; }
+
+  const arg = parsed.args[0]?.toLowerCase();
+  if (arg === 'on') {
+    enabled = true;
+    await reply(sock, msg, '👁️ *Anti View-Once ON* — view-once media will be saved. Use .vv to reveal.');
+  } else if (arg === 'off') {
+    enabled = false;
+    voStore.clear();
+    await reply(sock, msg, '🔕 *Anti View-Once OFF.*');
+  } else {
+    await reply(sock, msg, `👁️ Anti View-Once is currently *${enabled ? 'ON' : 'OFF'}*.\nUse *.antiviewonce on* or *.antiviewonce off*`);
   }
   return true;
 }
