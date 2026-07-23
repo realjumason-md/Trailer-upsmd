@@ -67,27 +67,17 @@ async function connectToWhatsApp() {
 
   setBotSocket(sock);
 
-  // ── PAIRING CODE ─────────────────────────────────────────────
-  if (!state.creds.registered && config.PAIRING_METHOD === 'phone') {
-    const phone = config.PAIRING_PHONE.replace(/[^0-9]/g, '');
-    await new Promise(r => setTimeout(r, 3000));
-    try {
-      const code = await sock.requestPairingCode(phone);
-      const formatted = code?.match(/.{1,4}/g)?.join('-') || code;
-      setPairingCode(formatted);
-      console.log('\n╔══════════════════════════════╗');
-      console.log('║   📱 WHATSAPP PAIRING CODE   ║');
-      console.log('╠══════════════════════════════╣');
-      console.log(`║   Code: ${formatted.padEnd(20)} ║`);
-      console.log('╠══════════════════════════════╣');
-      console.log('║  Open WhatsApp > Settings    ║');
-      console.log('║  > Linked Devices > Link a   ║');
-      console.log('║  Device > Enter code above   ║');
-      console.log('╚══════════════════════════════╝\n');
-      console.log(`[Pairing] Also available at: http://localhost:${config.PORT}/pair`);
-    } catch (e) {
-      console.error('[Pairing] Failed to get code:', e.message);
-    }
+  // ── PAIRING: web UI driven only ───────────────────────────────
+  // Do NOT auto-generate here. The user opens the bot URL in a
+  // browser, enters their number, and the POST /pair endpoint
+  // calls requestPairingCode. This prevents stale/expired codes.
+  if (!state.creds.registered) {
+    console.log('\n╔══════════════════════════════════════════╗');
+    console.log('║  📱 OPEN THIS URL TO LINK WHATSAPP       ║');
+    console.log('╠══════════════════════════════════════════╣');
+    console.log(`║  → Your bot URL (port ${String(config.PORT).padEnd(18)}) ║`);
+    console.log('║  Enter your number → get pairing code    ║');
+    console.log('╚══════════════════════════════════════════╝\n');
   }
 
   // ── CONNECTION UPDATES ────────────────────────────────────────
