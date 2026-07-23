@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: trailer-upsmd-bot
+    env: node
+    buildCommand: npm install
+    startCommand: node index.js
+    plan: free
+    envVars:
+      - key: OWNER_NUMBER
+        value: 256706106326
+      - key: PAIRING_METHOD
+        value: phone
+      - key: PAIRING_PHONE
+        value: 256706106326
+      - key: BOT_NAME
+        value: Trailer-UPS BOT
+      - key: AUTO_STATUS_VIEW
+        value: "true"
+      - key: AUTO_BIO
+        value: "true"
+      - key: ANTI_DELETE
+        value: "true"
+      - key: ANTI_EDIT
+        value: "true"
+      - key: LOG_LEVEL
+        value: silent
