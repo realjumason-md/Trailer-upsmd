@@ -28,11 +28,11 @@ module.exports = {
   // Express server port
   PORT: process.env.PORT || 3000,
 
-  // AI settings
+  // AI settings — Groq free tier by default
   AI_ENABLED: process.env.AI_ENABLED === 'true',
   AI_API_KEY: process.env.AI_API_KEY || '',
-  AI_MODEL: process.env.AI_MODEL || 'gpt-3.5-turbo',
-  AI_BASE_URL: process.env.AI_BASE_URL || 'https://api.openai.com/v1',
+  AI_MODEL: process.env.AI_MODEL || 'llama3-8b-8192',
+  AI_BASE_URL: process.env.AI_BASE_URL || 'https://api.groq.com/openai/v1',
   AI_SYSTEM_PROMPT: process.env.AI_SYSTEM_PROMPT || 'You are a helpful WhatsApp assistant. Reply concisely.',
 
   // GitHub repo for update plugin

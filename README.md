@@ -95,21 +95,32 @@ heroku logs --tail
 
 ---
 
-## 🤖 AI Reply Setup
+## 🤖 AI Reply Setup (Groq — Free)
 
-To enable AI replies on your DMs:
+This bot uses **Groq's free tier** — no credit card needed.
 
-1. Get an API key from [OpenAI](https://platform.openai.com) or any OpenAI-compatible service
+1. Go to [console.groq.com](https://console.groq.com) → sign up free → create an API key
 2. Add to `.env`:
    ```
-   AI_API_KEY=sk-your-key-here
-   AI_MODEL=gpt-3.5-turbo
+   AI_API_KEY=gsk_your_groq_key_here
+   AI_MODEL=llama3-8b-8192
+   AI_BASE_URL=https://api.groq.com/openai/v1
    ```
 3. Use commands:
    - `.aionall` — AI on for ALL DMs
    - `.aion` — AI on for current chat only
    - `.aioff` — Exclude current chat (even if aionall is on)
    - `.aialloff` — Turn off AI everywhere
+
+**Free Groq models you can use:**
+
+| Model | Speed | Best for |
+|-------|-------|---------|
+| `llama3-8b-8192` | ⚡ Very fast | Default, casual chats |
+| `llama-3.1-8b-instant` | ⚡ Fastest | Quick replies |
+| `llama3-70b-8192` | 🧠 Smarter | Complex conversations |
+| `mixtral-8x7b-32768` | 📚 Large context | Long threads |
+| `gemma2-9b-it` | ✅ Balanced | General use |
 
 ---
 
