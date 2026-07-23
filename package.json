@@ -5,10 +5,10 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "npm install --omit=dev && node index.js",
     "dev": "node index.js",
-    "start:optimized": "node --max-old-space-size=512 index.js",
-    "start:qr": "node index.js --qr-code"
+    "start:optimized": "npm install --omit=dev && node --max-old-space-size=512 index.js",
+    "start:qr": "npm install --omit=dev && node index.js --qr-code"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc13",
@@ -29,6 +29,6 @@
     "sharp": "^0.34.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=18.0.0"
   }
 }
