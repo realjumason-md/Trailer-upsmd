@@ -1,14 +1,18 @@
 /**
  * ANTI-DELETE — stores messages and re-sends deleted ones
+ * Toggle: .antidelete on | .antidelete off
  */
 
 import { downloadMediaMessage } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import config from '../config.js';
-import { sendToOwner, jidToNumber, getMessageType } from '../lib/utils.js';
+import { isOwner, reply, sendToOwner, jidToNumber, getMessageText, getMessageType } from '../lib/utils.js';
 
-const store   = new Map(); // id → { msg, chat, sender, timestamp }
-const MAX     = 2000;
+const store = new Map(); // id → { msg, chat, sender, timestamp }
+const MAX   = 2000;
+
+// Runtime toggle (starts from env config)
+let enabled = config.ANTI_DELETE;
 
 export function storeMessage(msg) {
   if (!msg.message || !msg.key.id) return;
@@ -26,7 +30,7 @@ export function storeMessage(msg) {
 }
 
 export async function handleDelete(sock, update) {
-  if (!config.ANTI_DELETE) return;
+  if (!enabled) return;
 
   const { key, update: upd } = update;
   if (!key || !upd?.messageStubType) return;
@@ -76,6 +80,24 @@ export async function handleDelete(sock, update) {
   } catch (err) {
     console.error('[anti-delete]', err.message);
   }
+}
+
+// ── Toggle command ─────────────────────────────────────────────────────────────
+export async function handleAntiDeleteCommand(sock, msg, parsed) {
+  if (parsed?.command !== 'antidelete') return false;
+  if (!isOwner(msg)) { await reply(sock, msg, '🔒 Owner only.'); return true; }
+
+  const arg = parsed.args[0]?.toLowerCase();
+  if (arg === 'on') {
+    enabled = true;
+    await reply(sock, msg, '🛡️ *Anti-Delete ON* — deleted messages will be forwarded.');
+  } else if (arg === 'off') {
+    enabled = false;
+    await reply(sock, msg, '🔕 *Anti-Delete OFF.*');
+  } else {
+    await reply(sock, msg, `🛡️ Anti-Delete is currently *${enabled ? 'ON' : 'OFF'}*.\nUse *.antidelete on* or *.antidelete off*`);
+  }
+  return true;
 }
 
 export default { storeMessage, handleDelete };
