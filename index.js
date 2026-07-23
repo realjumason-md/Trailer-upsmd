@@ -25,18 +25,17 @@ import pino from 'pino';
 
 import config from './config.js';
 import { startServer, setConnected } from './server.js';
-import { startAutoBio } from './plugins/setbio.js';
-import { handleSetBio } from './plugins/setbio.js';
+import { startAutoBio, handleSetBio } from './plugins/setbio.js';
 import { handleSetDp } from './plugins/setdp.js';
 import { handleTikTok } from './plugins/tiktok.js';
 import { handleShazam } from './plugins/shazam.js';
 import { handleUpdate } from './plugins/update.js';
 import { handleAICommand, handleAIReply } from './plugins/ai.js';
-import { storeViewOnce, handleVV } from './plugins/antiviewonce.js';
+import { storeViewOnce, handleVV, handleAntiViewOnceCommand } from './plugins/antiviewonce.js';
 import { handleGetDp } from './plugins/getdp.js';
-import antidelete from './plugins/antidelete.js';
-import antiedit from './plugins/antiedit.js';
-import autostatus from './plugins/autostatus.js';
+import antidelete, { handleAntiDeleteCommand } from './plugins/antidelete.js';
+import antiedit, { handleAntiEditCommand } from './plugins/antiedit.js';
+import autostatus, { handleAutoStatusCommand } from './plugins/autostatus.js';
 import { parseCommand, getMessageText, isOwner, reply } from './lib/utils.js';
 import { loadSession } from './lib/session.js';
 
@@ -139,21 +138,11 @@ async function connectToWhatsApp() {
     connectTimeoutMs:             60_000,
     keepAliveIntervalMs:          10_000,
     getMessage: async (key) => {
-      // Enables message retry on re-delivery failures
       return undefined;
     },
   });
 
   // ── Pairing code (runs once, 3 s after socket is created) ──────────────────
-  //
-  // WHY THIS PLACEMENT MATTERS:
-  //   requestPairingCode must be called AFTER the socket is constructed but
-  //   BEFORE the noise handshake completes (i.e., before "connecting" fires and
-  //   *well* before "open"). The 3-second window is enough for Baileys to set up
-  //   the noise key internally while avoiding "too early" rejects from WhatsApp.
-  //   Calling it inside the "connecting" event (old approach) is unreliable —
-  //   that event may already be past the ideal window on slow hosts.
-  //
   const isRegistered = state.creds?.registered === true;
 
   if (!useQR && !isRegistered) {
@@ -219,7 +208,7 @@ async function connectToWhatsApp() {
 
       // Status broadcast — auto-view
       if (msg.key?.remoteJid === 'status@broadcast') {
-        if (config.AUTO_STATUS_VIEW) await autostatus.handle(sock, msg);
+        await autostatus.handle(sock, msg);
         return;
       }
 
@@ -228,21 +217,26 @@ async function connectToWhatsApp() {
       antiedit.storeMessage(msg);
 
       // Store view-once references
-      if (config.ANTI_VIEW_ONCE) storeViewOnce(msg);
+      storeViewOnce(msg);
 
       const text   = getMessageText(msg);
       const parsed = text ? parseCommand(text, config.PREFIX) : null;
 
-      // ── Owner commands ────────────────────────────────────────────────────
+      // ── Commands ──────────────────────────────────────────────────────────
       if (parsed) {
         const { command } = parsed;
 
+        // ── General ───────────────────────────────────────────────────────
         if (command === 'help' || command === 'menu') {
           await sendHelp(sock, msg);
           return;
         }
         if (command === 'ping') {
           await reply(sock, msg, '🏓 Pong! Bot is alive.');
+          return;
+        }
+        if (command === 'status') {
+          await sendStatus(sock, msg);
           return;
         }
         if (['restart', 'reboot'].includes(command)) {
@@ -252,6 +246,13 @@ async function connectToWhatsApp() {
           return;
         }
 
+        // ── Plugin toggles ────────────────────────────────────────────────
+        if (await handleAntiDeleteCommand(sock, msg, parsed)) return;
+        if (await handleAntiEditCommand(sock, msg, parsed)) return;
+        if (await handleAutoStatusCommand(sock, msg, parsed)) return;
+        if (await handleAntiViewOnceCommand(sock, msg, parsed)) return;
+
+        // ── Feature commands ──────────────────────────────────────────────
         if (await handleAICommand(sock, msg, parsed)) return;
         if (await handleSetBio(sock, msg, parsed)) return;
         if (await handleSetDp(sock, msg, parsed)) return;
@@ -262,7 +263,7 @@ async function connectToWhatsApp() {
         if (await handleGetDp(sock, msg, parsed)) return;
       }
 
-      // ── AI auto-reply ─────────────────────────────────────────────────────
+      // ── AI auto-reply ─────────────────────────────────────────────────
       if (config.AI_ENABLED) await handleAIReply(sock, msg);
 
     } catch (err) {
@@ -281,7 +282,7 @@ async function connectToWhatsApp() {
   return sock;
 }
 
-// ─── Pairing (MEGA-MD proven approach, Trailer identity) ─────────────────────
+// ─── Pairing (proven approach, Trailer identity) ──────────────────────────────
 async function doPairing(sock, state, attempt = 1) {
   try {
     let phoneInput = config.PAIRING_NUMBER;
@@ -302,7 +303,6 @@ async function doPairing(sock, state, attempt = 1) {
 
     phoneInput = phoneInput.replace(/\D/g, '');
 
-    // Validate with awesome-phonenumber (the same library MEGA-MD uses)
     const pn = parsePhoneNumber(`+${phoneInput}`);
     if (!pn.valid) {
       printLog('error', `Invalid phone number "${phoneInput}". Include country code, no leading zero.`);
@@ -323,7 +323,6 @@ async function doPairing(sock, state, attempt = 1) {
     printLog('error', `Pairing attempt ${attempt}/3 failed: ${err.message}`);
 
     if (attempt < 3) {
-      // Clear partial session and create a fresh socket — same strategy as MEGA-MD
       try { fs.rmSync(SESSION_DIR, { recursive: true, force: true }); } catch (_) {}
       fs.mkdirSync(SESSION_DIR, { recursive: true });
       printLog('info', 'Cleared session — restarting connection for a fresh pairing attempt...');
@@ -335,37 +334,59 @@ async function doPairing(sock, state, attempt = 1) {
   }
 }
 
+// ─── Status overview ──────────────────────────────────────────────────────────
+async function sendStatus(sock, msg) {
+  if (!isOwner(msg)) { await reply(sock, msg, '🔒 Owner only.'); return; }
+  const p = config.PREFIX;
+  const text =
+    `╔══════════════════════════╗\n` +
+    `║  📊 Plugin Status         ║\n` +
+    `╚══════════════════════════╝\n\n` +
+    `🛡️ Anti-Delete:    ${config.ANTI_DELETE    ? '🟢 ON' : '🔴 OFF'}\n` +
+    `✏️ Anti-Edit:      ${config.ANTI_EDIT      ? '🟢 ON' : '🔴 OFF'}\n` +
+    `👁️ Anti View-Once: ${config.ANTI_VIEW_ONCE ? '🟢 ON' : '🔴 OFF'}\n` +
+    `📺 Auto Status:    ${config.AUTO_STATUS_VIEW ? '🟢 ON' : '🔴 OFF'}\n` +
+    `🤖 AI Reply:       ${config.AI_ENABLED ? (config.AI_API_KEY ? '🟢 ON' : '⚠️ No API key') : '🔴 OFF'}\n` +
+    `📝 Auto Bio:       ${config.AUTO_BIO ? '🟢 ON' : '🔴 OFF'}\n\n` +
+    `_Use ${p}antidelete / ${p}antiedit / ${p}autostatus / ${p}antiviewonce / ${p}aionall to toggle_`;
+  await reply(sock, msg, text);
+}
+
 // ─── Help menu ────────────────────────────────────────────────────────────────
 async function sendHelp(sock, msg) {
-  const prefix = config.PREFIX;
+  const p = config.PREFIX;
   const text =
     `╔══════════════════════════╗\n` +
     `║  🤖 ${config.BOT_NAME.padEnd(20)} ║\n` +
     `╚══════════════════════════╝\n\n` +
     `*📥 DOWNLOADER*\n` +
-    `▸ ${prefix}tiktok <url> — TikTok video\n` +
-    `▸ ${prefix}tiktokaudio <url> — TikTok audio\n` +
-    `▸ ${prefix}shazam — Identify song (reply to audio)\n\n` +
-    `*🛡️ PROTECTION*\n` +
-    `▸ Anti-Delete: AUTO (shows deleted msgs)\n` +
-    `▸ Anti-Edit: AUTO (shows original before edit)\n` +
-    `▸ Auto Status View: AUTO\n` +
-    `▸ ${prefix}vv — Reveal view-once media\n\n` +
+    `▸ ${p}tiktok <url> — TikTok video\n` +
+    `▸ ${p}tiktokaudio <url> — TikTok audio\n` +
+    `▸ ${p}shazam — Identify song (reply to audio)\n\n` +
+    `*🛡️ PROTECTION (owner toggles)*\n` +
+    `▸ ${p}antidelete on/off — Anti-delete alert\n` +
+    `▸ ${p}antiedit on/off — Anti-edit alert\n` +
+    `▸ ${p}antiviewonce on/off — Save view-once media\n` +
+    `▸ ${p}vv — Reveal saved view-once media\n` +
+    `▸ ${p}autostatus on/off — Auto-view statuses\n\n` +
+    `*🤖 AI REPLY (owner toggles)*\n` +
+    `▸ ${p}aionall — AI ON for all DM chats\n` +
+    `▸ ${p}aialloff — AI OFF for all chats\n` +
+    `▸ ${p}aion — AI ON for this chat only\n` +
+    `▸ ${p}aioff — AI OFF for this chat only\n` +
+    `▸ ${p}aistatus — Show AI status\n\n` +
     `*👤 PROFILE*\n` +
-    `▸ ${prefix}setbio <text> — Set your bio\n` +
-    `▸ ${prefix}autobio on/off — Auto gangster quotes bio\n` +
-    `▸ ${prefix}quotebio — Set random gangster quote as bio\n` +
-    `▸ ${prefix}setdp — Set profile pic (attach or reply to image)\n\n` +
-    `*🤖 AI REPLY*\n` +
-    `▸ ${prefix}aionall — AI on for ALL DM chats\n` +
-    `▸ ${prefix}aialloff — AI off for all chats\n` +
-    `▸ ${prefix}aion — AI on for this chat\n` +
-    `▸ ${prefix}aioff — AI off for this chat\n\n` +
+    `▸ ${p}setbio <text> — Set your bio\n` +
+    `▸ ${p}autobio on/off — Auto gangster quotes bio\n` +
+    `▸ ${p}quotebio — Set random gangster quote as bio\n` +
+    `▸ ${p}setdp — Set profile pic (attach or reply to image)\n` +
+    `▸ ${p}getdp @user — Get someone's profile pic\n\n` +
     `*⚙️ SYSTEM*\n` +
-    `▸ ${prefix}update — Pull latest updates from GitHub\n` +
-    `▸ ${prefix}restart — Restart bot (session preserved)\n` +
-    `▸ ${prefix}ping — Check if bot is alive\n\n` +
-    `_Owner-only commands marked with 🔒_`;
+    `▸ ${p}status — Show all plugin on/off status\n` +
+    `▸ ${p}update — Pull latest updates from GitHub\n` +
+    `▸ ${p}restart — Restart bot (session preserved)\n` +
+    `▸ ${p}ping — Check if bot is alive\n\n` +
+    `_All toggle commands are owner-only 🔒_`;
 
   await reply(sock, msg, text);
 }
@@ -376,6 +397,14 @@ async function main() {
   console.log(chalk.green.bold(`║  🤖 ${config.BOT_NAME.padEnd(28)} ║`));
   console.log(chalk.green.bold('║  Starting up...                  ║'));
   console.log(chalk.green.bold('╚══════════════════════════════════╝\n'));
+
+  if (config.AI_ENABLED) {
+    printLog('success', `AI auto-reply is ON (model: ${config.AI_MODEL})`);
+  } else if (config.AI_API_KEY) {
+    printLog('warning', 'AI_API_KEY found but AI_ENABLED=false — AI is off');
+  } else {
+    printLog('info', 'AI auto-reply is OFF (no AI_API_KEY set)');
+  }
 
   startServer();
   await connectToWhatsApp();
