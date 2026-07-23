@@ -13,11 +13,12 @@ module.exports = {
   // Session directory
   SESSION_DIR: process.env.SESSION_DIR || './auth_info_baileys',
 
-  // Pairing method: 'phone' or 'qr'
+  // Pairing method: console phone pairing or terminal QR
   PAIRING_METHOD: process.env.PAIRING_METHOD || 'phone',
 
-  // Phone number for pairing code (with country code, no +)
-  PAIRING_PHONE: process.env.PAIRING_PHONE || '256706106326',
+  // Optional phone number for non-interactive hosts. When empty, the bot
+  // prompts for it in the hosting console on first startup.
+  PAIRING_PHONE: process.env.PAIRING_PHONE || '',
 
   // Auto status view
   AUTO_STATUS_VIEW: process.env.AUTO_STATUS_VIEW !== 'false',

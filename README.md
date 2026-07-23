@@ -64,6 +64,8 @@ Once paired, the session is saved in `auth_info_baileys/`. You won't need to pai
 
 Trailer-upsmd is a long-running WhatsApp client. Use a host that keeps the
 Node.js process alive and preserves the `auth_info_baileys/` session directory.
+Pairing is done directly in the hosting console: enter your WhatsApp number
+when prompted, then enter the code printed in that same console.
 The complete platform configurations are included in [`DEPLOYMENT.md`](./DEPLOYMENT.md).
 
 ### Render
@@ -72,14 +74,14 @@ The complete platform configurations are included in [`DEPLOYMENT.md`](./DEPLOYM
 2. Let Render use `render.yaml`.
 3. Set `OWNER_NUMBER`, `PAIRING_PHONE`, and any optional API keys.
 4. Deploy on an always-on plan; the included disk preserves the WhatsApp session.
-5. Open the service URL and use the pairing page.
+5. Open the service logs and enter your WhatsApp number when prompted.
 
 ### Railway
 
 1. Connect this repository; Railway will use `railway.json` and `Dockerfile`.
 2. Add `OWNER_NUMBER` and either `PAIRING_PHONE` or a paired session.
 3. Add a persistent volume mounted at `/app/auth_info_baileys`.
-4. Deploy and open the generated service URL to pair.
+4. Deploy and enter your WhatsApp number in the service console to pair.
 
 ### Fly.io
 
@@ -113,7 +115,8 @@ docker run -d --name trailer-upsmd --restart unless-stopped \
 ### Replit
 
 Use Node.js 20, install dependencies with `npm install`, run
-`npm run start:optimized`, and keep `auth_info_baileys/` in persistent storage.
+`npm run start:optimized`, enter your number in the console, and keep
+`auth_info_baileys/` in persistent storage.
 
 ### Why Vercel is not included
 

@@ -113,6 +113,17 @@ const html = (body) => `<!DOCTYPE html>
 
 /* ── Root — pairing form ────────────────────────────────────────────────── */
 app.get('/', (req, res) => {
+  return res.send(html(`
+    <div class="logo">🤖</div>
+    <h1>${config.BOT_NAME}</h1>
+    <div class="sub">WhatsApp Bot</div>
+    <div class="status-row">Status <span class="badge ${isConnected ? 'online' : 'offline'}">● ${isConnected ? 'Connected' : 'Waiting for console pairing'}</span></div>
+    <div class="steps">
+      Pairing is handled in the server console.<br><br>
+      Enter your WhatsApp number in the Wispbyte console. The pairing code will be printed there.
+    </div>
+  `));
+
   if (isConnected) {
     return res.send(html(`
       <div class="logo">🤖</div>
@@ -174,6 +185,8 @@ app.get('/', (req, res) => {
 
 /* ── POST /pair — request pairing code ─────────────────────────────────── */
 app.post('/pair', async (req, res) => {
+  return res.status(410).send('Pairing is console-only. Enter your number in the server console.');
+
   const raw   = (req.body.phone || '').toString().replace(/[^0-9]/g, '');
   if (!raw || raw.length < 7) {
     return res.send(html(`
@@ -232,6 +245,8 @@ app.post('/pair', async (req, res) => {
 
 /* ── GET /pair (JSON) — for programmatic access ─────────────────────────── */
 app.get('/pair', (req, res) => {
+  return res.status(410).json({ success: false, message: 'Pairing is console-only. Enter your number in the server console.' });
+
   if (pairingCodeCache) return res.json({ success: true, code: pairingCodeCache });
   if (isConnected)      return res.json({ success: true, connected: true, message: 'Already linked.' });
   res.json({ success: false, message: 'No pairing code yet. POST your phone number to /pair.' });

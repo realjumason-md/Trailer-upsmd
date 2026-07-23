@@ -17,8 +17,9 @@ const {
 const pino = require('pino');
 const path = require('path');
 const fs = require('fs');
+const readline = require('readline');
 const config = require('./config');
-const { startServer, setBotSocket, setPairingCode, setConnected } = require('./server');
+const { startServer, setBotSocket, setConnected } = require('./server');
 const { startAutoBio } = require('./plugins/setbio');
 
 // Plugins
@@ -67,19 +68,6 @@ async function connectToWhatsApp() {
 
   setBotSocket(sock);
 
-  // ── PAIRING: web UI driven only ───────────────────────────────
-  // Do NOT auto-generate here. The user opens the bot URL in a
-  // browser, enters their number, and the POST /pair endpoint
-  // calls requestPairingCode. This prevents stale/expired codes.
-  if (!state.creds.registered) {
-    console.log('\n╔══════════════════════════════════════════╗');
-    console.log('║  📱 OPEN THIS URL TO LINK WHATSAPP       ║');
-    console.log('╠══════════════════════════════════════════╣');
-    console.log(`║  → Your bot URL (port ${String(config.PORT).padEnd(18)}) ║`);
-    console.log('║  Enter your number → get pairing code    ║');
-    console.log('╚══════════════════════════════════════════╝\n');
-  }
-
   // ── CONNECTION UPDATES ────────────────────────────────────────
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr && config.PAIRING_METHOD === 'qr') {
@@ -92,7 +80,6 @@ async function connectToWhatsApp() {
 
     if (connection === 'open') {
       retryCount = 0;
-      setPairingCode(null);
       setConnected(true);
       console.log(`\n✅ Connected as: ${sock.user?.name} (+${sock.user?.id?.split(':')[0]})`);
       console.log(`🤖 Bot: ${config.BOT_NAME} is online!\n`);
@@ -128,6 +115,13 @@ async function connectToWhatsApp() {
 
   // ── CREDENTIALS SAVE ─────────────────────────────────────────
   sock.ev.on('creds.update', saveCreds);
+
+  // ── CONSOLE PAIRING ───────────────────────────────────────────
+  // Wispbyte's console sends stdin to the Node process. Ask for the number
+  // there and print the pairing code back into that same console.
+  if (!state.creds.registered && config.PAIRING_METHOD !== 'qr') {
+    setTimeout(() => generateConsolePairingCode(sock), 3000);
+  }
 
   // ── MESSAGES: UPSERT ─────────────────────────────────────────
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
@@ -270,6 +264,51 @@ async function connectToWhatsApp() {
   });
 
   return sock;
+}
+
+async function generateConsolePairingCode(socket) {
+  try {
+    let phone = (config.PAIRING_PHONE || '').replace(/\D/g, '');
+
+    if (!phone) {
+      console.log('\n╔══════════════════════════════════════════╗');
+      console.log('║  📱 WHATSAPP CONSOLE PAIRING             ║');
+      console.log('╠══════════════════════════════════════════╣');
+      console.log('║  Enter your number below                  ║');
+      console.log('║  Country code included, no + or spaces   ║');
+      console.log('╚══════════════════════════════════════════╝');
+
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+
+      phone = (await new Promise((resolve) => {
+        rl.question('WhatsApp number: ', resolve);
+      })).replace(/\D/g, '');
+      rl.close();
+    }
+
+    if (phone.length < 7 || phone.length > 15) {
+      throw new Error('Invalid phone number. Use country code with digits only, for example 256706106326.');
+    }
+
+    const code = await socket.requestPairingCode(phone);
+    const formatted = code?.match(/.{1,4}/g)?.join('-') || code;
+
+    console.log('\n╔══════════════════════════════════════════╗');
+    console.log('║  ✅ WHATSAPP PAIRING CODE                ║');
+    console.log('╠══════════════════════════════════════════╣');
+    console.log(`║  ${String(formatted).padEnd(40)}║`);
+    console.log('╠══════════════════════════════════════════╣');
+    console.log('║  WhatsApp → Linked Devices               ║');
+    console.log('║  → Link a device → phone number         ║');
+    console.log('║  Enter the code above                    ║');
+    console.log('╚══════════════════════════════════════════╝\n');
+  } catch (error) {
+    console.error(`[Pairing] Could not generate code: ${error.message}`);
+    console.error('[Pairing] Restart the bot and try again, or set PAIRING_PHONE in the host environment.');
+  }
 }
 
 async function sendHelp(sock, msg) {

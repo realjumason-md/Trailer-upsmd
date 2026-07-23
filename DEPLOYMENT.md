@@ -8,8 +8,9 @@ Node.js process with persistent storage for `auth_info_baileys/`.
 - Start command: `npm run start:optimized`
 - Node.js: 20 or newer
 - Health endpoint: `/health`
-- Required values: `OWNER_NUMBER` and either the web pairing flow or
-  `PAIRING_PHONE`
+- Required value: `OWNER_NUMBER`
+- Pairing: enter the WhatsApp number in the server console, or set
+  `PAIRING_PHONE` for a non-interactive host
 - Session directory: `auth_info_baileys/`
 
 After pairing, keep the session directory on persistent storage. If the host
@@ -42,6 +43,24 @@ LOG_LEVEL=info
 ```
 
 Set `AI_API_KEY` only if AI replies are enabled.
+
+## Console pairing
+
+On first startup, the bot prints:
+
+```text
+WhatsApp number:
+```
+
+Enter the full number with country code and digits only, for example:
+
+```text
+256706106326
+```
+
+The pairing code is then printed in the same console. In WhatsApp, open
+**Linked Devices → Link a device → Link with phone number instead** and enter
+that code.
 
 ## Why Vercel is not supported
 
