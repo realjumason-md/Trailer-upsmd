@@ -7,7 +7,9 @@ import config from '../config.js';
 import { isOwner, reply, getMessageText, isDM } from '../lib/utils.js';
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let globalAiOn = false;
+// globalAiOn starts TRUE when AI is enabled so it works immediately without
+// needing to send .aionall first.
+let globalAiOn = config.AI_ENABLED;
 const chatAiOn  = new Set();
 const chatAiOff = new Set();
 
@@ -57,7 +59,6 @@ async function callAI(jid, userText) {
 }
 
 function typingDelay(text) {
-  // ~60 WPM average typing speed
   return Math.min(3000, Math.max(500, (text.length / 5) * (60000 / 3600)));
 }
 
@@ -104,7 +105,7 @@ export async function handleAIReply(sock, msg) {
 // ── Command handler ────────────────────────────────────────────────────────────
 export async function handleAICommand(sock, msg, parsed) {
   const { command } = parsed;
-  if (!['aionall', 'aialloff', 'aion', 'aioff'].includes(command)) return false;
+  if (!['aionall', 'aialloff', 'aion', 'aioff', 'aistatus'].includes(command)) return false;
   if (!isOwner(msg)) { await reply(sock, msg, '🔒 Owner only.'); return true; }
 
   const jid = msg.key.remoteJid;
@@ -127,6 +128,13 @@ export async function handleAICommand(sock, msg, parsed) {
   if (command === 'aioff') {
     chatAiOn.delete(jid); chatAiOff.add(jid);
     await reply(sock, msg, '🔕 *AI reply OFF for this chat.*');
+    return true;
+  }
+  if (command === 'aistatus') {
+    const status = globalAiOn ? '🟢 ON (all DMs)' : '🔴 OFF globally';
+    const exceptions = chatAiOff.size ? `\nExcluded chats: ${chatAiOff.size}` : '';
+    const overrides  = chatAiOn.size  ? `\nForced-on chats: ${chatAiOn.size}` : '';
+    await reply(sock, msg, `🤖 *AI Status*\n${status}${exceptions}${overrides}\nKey: ${config.AI_API_KEY ? '✅ set' : '❌ missing'}`);
     return true;
   }
   return false;
