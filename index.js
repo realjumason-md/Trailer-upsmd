@@ -1,487 +1,341 @@
 /**
- * TRAILER-UPSMD WHATSAPP BOT
- * Main entry point — connects to WhatsApp and routes all plugins
+ * TRAILER-UPS BOT — Main entry point
+ * Connects to WhatsApp, handles reconnects, and routes all plugins.
  */
 
-require('dotenv').config();
-
-if (process.versions?.bun || typeof Bun !== 'undefined') {
-  console.error('[Runtime] Bun is not supported for this bot.');
-  console.error('[Runtime] Select Node.js 20+ in Wispbyte and start with: npm run start:optimized');
-  process.exit(1);
-}
-
-const {
-  default: makeWASocket,
+import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import readline from 'readline';
+import chalk from 'chalk';
+import QRCode from 'qrcode';
+import { parsePhoneNumber } from 'awesome-phonenumber';
+import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore,
   Browsers,
-} = require('@whiskeysockets/baileys');
+  makeCacheableSignalKeyStore,
+  delay,
+  jidNormalizedUser,
+} from '@whiskeysockets/baileys';
+import NodeCache from 'node-cache';
+import pino from 'pino';
 
-const pino = require('pino');
-const path = require('path');
-const fs = require('fs');
-const readline = require('readline');
-const config = require('./config');
-const { startServer, setBotSocket, setConnected } = require('./server');
-const { startAutoBio } = require('./plugins/setbio');
+import config from './config.js';
+import { startServer, setConnected } from './server.js';
+import { startAutoBio } from './plugins/setbio.js';
+import { handleSetBio } from './plugins/setbio.js';
+import { handleSetDp } from './plugins/setdp.js';
+import { handleTikTok } from './plugins/tiktok.js';
+import { handleShazam } from './plugins/shazam.js';
+import { handleUpdate } from './plugins/update.js';
+import { handleAICommand, handleAIReply } from './plugins/ai.js';
+import { storeViewOnce, handleVV } from './plugins/antiviewonce.js';
+import { handleGetDp } from './plugins/getdp.js';
+import antidelete from './plugins/antidelete.js';
+import antiedit from './plugins/antiedit.js';
+import autostatus from './plugins/autostatus.js';
+import { parseCommand, getMessageText, isOwner, reply } from './lib/utils.js';
+import { loadSession } from './lib/session.js';
 
-// Plugins
-const antidelete = require('./plugins/antidelete');
-const antiedit = require('./plugins/antiedit');
-const autostatus = require('./plugins/autostatus');
-const { handleSetBio } = require('./plugins/setbio');
-const { handleSetDp } = require('./plugins/setdp');
-const { handleTikTok } = require('./plugins/tiktok');
-const { handleShazam } = require('./plugins/shazam');
-const { handleUpdate } = require('./plugins/update');
-const { handleAICommand, handleAIReply } = require('./plugins/ai');
-const { storeViewOnce, handleVV } = require('./plugins/antiviewonce');
-const { handleGetDp } = require('./plugins/getdp');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
 
-const { parseCommand, getMessageText, isOwner, reply } = require('./lib/utils');
+// ─── Logger ──────────────────────────────────────────────────────────────────
+const logger = pino({ level: 'silent' });
 
-// Logger — quiet unless in dev
-const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
+export function printLog(type, message) {
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+  const colors = { info: chalk.blue, success: chalk.green, warning: chalk.yellow, error: chalk.red };
+  const icons  = { info: '💡', success: '✅', warning: '⚠️', error: '❌' };
+  const color  = colors[type] || chalk.white;
+  const icon   = icons[type]  || '•';
+  console.log(`${chalk.gray(`[${ts}]`)} ${color(icon)} ${color(message)}`);
+}
 
-// Ensure session directory exists
+// ─── Session directory ────────────────────────────────────────────────────────
 const SESSION_DIR = path.resolve(config.SESSION_DIR);
 if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
 
-let sock;
-let retryCount = 0;
-const MAX_RETRIES = 5;
-let socketGeneration = 0;
-let pairingPhone = null;
-let pairingPhonePromise = null;
-let pairingReadline = null;
-let pairingReadlineClosed = false;
+// ─── Phone number input ───────────────────────────────────────────────────────
+let rl       = null;
+let rlClosed = false;
 
-function normalizePairingPhone(value) {
-  let phone = String(value || '').replace(/\D/g, '');
-  if (phone.startsWith('00')) phone = phone.slice(2);
-
-  if (phone.length < 7 || phone.length > 15) {
-    throw new Error(
-      'Invalid phone number. Use the country code and digits only, for example 256706106326.'
-    );
-  }
-  if (phone.startsWith('0')) {
-    throw new Error(
-      'Include the country code and remove the local leading zero, for example 256706106326.'
-    );
-  }
-  return phone;
+if (process.stdin.isTTY && !config.PAIRING_NUMBER) {
+  rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  rl.on('close', () => { rlClosed = true; });
 }
 
-function closePairingReadline() {
-  if (pairingReadline && !pairingReadlineClosed) {
-    pairingReadlineClosed = true;
-    pairingReadline.close();
-  }
-  pairingReadline = null;
-}
+const question = (text) =>
+  rl && !rlClosed
+    ? new Promise(resolve => rl.question(text, resolve))
+    : Promise.resolve(config.PAIRING_NUMBER || config.OWNER_NUMBER);
 
-function getPairingPhone() {
-  if (pairingPhone) return Promise.resolve(pairingPhone);
-  if (pairingPhonePromise) return pairingPhonePromise;
+process.on('exit',   () => { if (rl && !rlClosed) rl.close(); });
+process.on('SIGINT', () => { if (rl && !rlClosed) rl.close(); process.exit(0); });
 
-  pairingPhonePromise = (async () => {
-    if (config.PAIRING_PHONE) {
-      const phone = normalizePairingPhone(config.PAIRING_PHONE);
-      console.log(`[Pairing] Using configured phone number ending in ${phone.slice(-4)}.`);
-      pairingPhone = phone;
-      return phone;
-    }
-
-    if (!process.stdin || process.stdin.destroyed || process.stdin.readable === false) {
-      throw new Error(
-        'No usable console input is available. Set PAIRING_PHONE in the host environment and restart.'
-      );
-    }
-
-    console.log('\n╔══════════════════════════════════════════╗');
-    console.log('║  📱 WHATSAPP CONSOLE PAIRING             ║');
-    console.log('╠══════════════════════════════════════════╣');
-    console.log('║  Include country code; digits only       ║');
-    console.log('║  Example: 256706106326                   ║');
-    console.log('╚══════════════════════════════════════════╝');
-
-    pairingReadlineClosed = false;
-    pairingReadline = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-
-    const answer = await new Promise((resolve) => {
-      pairingReadline.question('WhatsApp number: ', resolve);
-    });
-    closePairingReadline();
-    const phone = normalizePairingPhone(answer);
-    pairingPhone = phone;
-    return phone;
-  })().finally(() => {
-    pairingPhonePromise = null;
-  });
-
-  return pairingPhonePromise;
-}
-
-function cancelConsolePairing(currentSock) {
-  if (currentSock?.__trailerPairingTimer) {
-    clearTimeout(currentSock.__trailerPairingTimer);
-    currentSock.__trailerPairingTimer = null;
-  }
-  if (currentSock?.__trailerPairingRetryTimer) {
-    clearTimeout(currentSock.__trailerPairingRetryTimer);
-    currentSock.__trailerPairingRetryTimer = null;
-  }
-  if (currentSock) {
-    currentSock.__trailerPairingScheduled = false;
-    currentSock.__trailerPairingStarted = false;
-  }
-}
-
-function scheduleConsolePairing(currentSock, generation) {
-  if (
-    config.PAIRING_METHOD === 'qr' ||
-    currentSock.__trailerPairingScheduled ||
-    currentSock.__trailerAuthState?.creds?.registered
-  ) return;
-  currentSock.__trailerPairingScheduled = true;
-
-  // Give the initial WebSocket handshake time to become usable. A fixed
-  // request immediately at process startup can return a code that WhatsApp
-  // rejects because the registration transport is not ready yet.
-  currentSock.__trailerPairingTimer = setTimeout(() => {
-    currentSock.__trailerPairingTimer = null;
-    if (generation !== socketGeneration || currentSock !== sock) return;
-    if (currentSock.__trailerConnection === 'close' || currentSock.__trailerConnection === 'open') return;
-    generateConsolePairingCode(currentSock, generation).catch((error) => {
-      console.error(`[Pairing] Fatal pairing attempt error: ${error.message}`);
-    });
-  }, 2500);
-}
-
-function clearStaleUnregisteredSession() {
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function hasValidSession() {
   const credsPath = path.join(SESSION_DIR, 'creds.json');
-  if (!fs.existsSync(credsPath)) return;
-
+  if (!fs.existsSync(credsPath)) return false;
   try {
-    const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
-    if (creds.registered === false) {
-      fs.rmSync(SESSION_DIR, { recursive: true, force: true });
-      fs.mkdirSync(SESSION_DIR, { recursive: true });
-      console.log('[Session] Removed an incomplete registration; starting fresh pairing.');
+    const raw = fs.readFileSync(credsPath, 'utf8');
+    if (!raw.trim()) { printLog('warning', 'creds.json is empty'); return false; }
+    const creds = JSON.parse(raw);
+    if (!creds.noiseKey || !creds.signedIdentityKey || !creds.signedPreKey) {
+      printLog('warning', 'creds.json is missing required Signal fields');
+      return false;
     }
-  } catch (error) {
-    console.error(`[Session] Could not inspect saved credentials: ${error.message}`);
+    if (creds.registered === false) {
+      printLog('warning', 'Session exists but is not registered — clearing for fresh pairing');
+      try { fs.rmSync(SESSION_DIR, { recursive: true, force: true }); } catch (_) {}
+      fs.mkdirSync(SESSION_DIR, { recursive: true });
+      return false;
+    }
+    printLog('success', 'Valid registered session found');
+    return true;
+  } catch (err) {
+    printLog('warning', `Could not parse creds.json: ${err.message}`);
+    return false;
   }
 }
+
+// ─── Main connect loop ────────────────────────────────────────────────────────
+const useQR      = process.argv.includes('--qr-code');
+const msgRetryCache = new NodeCache();
 
 async function connectToWhatsApp() {
-  const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
-  const { version } = await fetchLatestBaileysVersion();
-  const generation = ++socketGeneration;
+  // Try restoring a session from SESSION_ID env if no local session exists
+  if (!hasValidSession() && config.SESSION_ID) {
+    printLog('info', 'Restoring session from SESSION_ID...');
+    const ok = await loadSession(SESSION_DIR, config.SESSION_ID);
+    if (!ok) printLog('warning', 'SESSION_ID restore failed — will pair fresh');
+    await delay(1000);
+  }
 
-  const currentSock = makeWASocket({
+  const { version }          = await fetchLatestBaileysVersion();
+  const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+
+  const saveCreds_ = async () => {
+    fs.mkdirSync(SESSION_DIR, { recursive: true });
+    await saveCreds();
+  };
+
+  const sock = makeWASocket({
     version,
     logger,
-    printQRInTerminal: config.PAIRING_METHOD === 'qr',
+    browser: Browsers.macOS('Chrome'),
     auth: {
       creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, logger),
+      keys:  makeCacheableSignalKeyStore(state.keys, pino({ level: 'fatal' })),
     },
-    // Match MEGA-MD's accepted desktop identity. Chrome is more reliable
-    // than the previous Safari identity for phone-number registration.
-    browser: Browsers.macOS('Chrome'),
-    markOnlineOnConnect: true,
+    msgRetryCounterCache: msgRetryCache,
+    markOnlineOnConnect:         true,
     generateHighQualityLinkPreview: true,
-    syncFullHistory: false,
-    connectTimeoutMs: 60000,
-    defaultQueryTimeoutMs: 60000,
-    keepAliveIntervalMs: 10000,
+    syncFullHistory:              false,
+    defaultQueryTimeoutMs:        60_000,
+    connectTimeoutMs:             60_000,
+    keepAliveIntervalMs:          10_000,
+    getMessage: async (key) => {
+      // Enables message retry on re-delivery failures
+      return undefined;
+    },
   });
 
-  sock = currentSock;
-  currentSock.__trailerAuthState = state;
-  setBotSocket(currentSock);
+  // ── Pairing code (runs once, 3 s after socket is created) ──────────────────
+  //
+  // WHY THIS PLACEMENT MATTERS:
+  //   requestPairingCode must be called AFTER the socket is constructed but
+  //   BEFORE the noise handshake completes (i.e., before "connecting" fires and
+  //   *well* before "open"). The 3-second window is enough for Baileys to set up
+  //   the noise key internally while avoiding "too early" rejects from WhatsApp.
+  //   Calling it inside the "connecting" event (old approach) is unreliable —
+  //   that event may already be past the ideal window on slow hosts.
+  //
+  const isRegistered = state.creds?.registered === true;
 
-  // ── CONNECTION UPDATES ────────────────────────────────────────
-  currentSock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-    if (generation !== socketGeneration || currentSock !== sock) return;
-    currentSock.__trailerConnection = connection || currentSock.__trailerConnection;
+  if (!useQR && !isRegistered) {
+    setTimeout(async () => {
+      await doPairing(sock, state);
+    }, 3000);
+  }
 
-    if (qr && config.PAIRING_METHOD === 'qr') {
+  // ── Credential save ─────────────────────────────────────────────────────────
+  sock.ev.on('creds.update', saveCreds_);
+
+  // ── Connection state ────────────────────────────────────────────────────────
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+    if (qr && useQR) {
       try {
-        const qrcode = require('qrcode-terminal');
-        qrcode.generate(qr, { small: true });
-        console.log('[QR] Scan the code above with WhatsApp');
-      } catch {}
-    }
-
-    // Pair only after Baileys has started the current socket. This replaces
-    // the old blind startup timer and avoids stale codes from a closing socket.
-    if (connection === 'connecting' && !state.creds.registered) {
-      scheduleConsolePairing(currentSock, generation);
+        console.log(await QRCode.toString(qr, { type: 'terminal', small: true }));
+      } catch {
+        console.log('QR:', qr);
+      }
     }
 
     if (connection === 'open') {
-      retryCount = 0;
-      cancelConsolePairing(currentSock);
-      closePairingReadline();
+      printLog('success', `Connected as ${sock.user?.name} (${sock.user?.id?.split(':')[0]})`);
+      printLog('success', `${config.BOT_NAME} is online!`);
       setConnected(true);
-      console.log(`\n✅ Connected as: ${sock.user?.name} (+${sock.user?.id?.split(':')[0]})`);
-      console.log(`🤖 Bot: ${config.BOT_NAME} is online!\n`);
-
-      // Start auto-bio rotation
+      if (rl && !rlClosed) { rl.close(); rl = null; }
       if (config.AUTO_BIO) startAutoBio(sock);
     }
 
     if (connection === 'close') {
-      cancelConsolePairing(currentSock);
       setConnected(false);
-      const reason = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = reason !== DisconnectReason.loggedOut;
+      const code = lastDisconnect?.error?.output?.statusCode;
+      const reason = DisconnectReason[code] || code;
+      printLog('warning', `Disconnected: ${reason}`);
 
-      console.log(`[Connection] Closed. Reason: ${reason}. Reconnect: ${shouldReconnect}`);
+      const shouldReconnect =
+        code !== DisconnectReason.loggedOut &&
+        code !== DisconnectReason.multideviceMismatch &&
+        code !== 401;
 
-      if (shouldReconnect && retryCount < MAX_RETRIES) {
-        retryCount++;
-        const delay = Math.min(1000 * 2 ** retryCount, 30000);
-        console.log(`[Connection] Reconnecting in ${delay / 1000}s... (attempt ${retryCount}/${MAX_RETRIES})`);
-        setTimeout(connectToWhatsApp, delay);
-      } else if (reason === DisconnectReason.loggedOut) {
-        console.log('[Connection] Logged out. Delete session folder and restart to re-pair.');
-        process.exit(1);
+      if (shouldReconnect) {
+        printLog('info', 'Reconnecting in 5 s...');
+        await delay(5000);
+        connectToWhatsApp();
       } else {
-        console.log('[Connection] Max retries reached. Restarting process...');
-        // Exit non-zero so Railway, Render, Fly.io, Heroku, and other
-        // process managers restart the bot instead of treating this as a
-        // successful shutdown.
-        process.exit(1);
+        printLog('error', 'Logged out. Delete the session folder and restart to re-pair.');
       }
     }
   });
 
-  // ── CREDENTIALS SAVE ─────────────────────────────────────────
-  currentSock.ev.on('creds.update', saveCreds);
+  // ── Messages ─────────────────────────────────────────────────────────────────
+  sock.ev.on('messages.upsert', async (chatUpdate) => {
+    try {
+      if (chatUpdate.type !== 'notify') return;
+      const msg = chatUpdate.messages[0];
+      if (!msg?.message) return;
 
-  // ── CONSOLE PAIRING ───────────────────────────────────────────
-  // Wispbyte's console sends stdin to the Node process. Ask for the number
-  // there and print the pairing code back into that same console.
-  if (!state.creds.registered && config.PAIRING_METHOD !== 'qr') {
-    // Some Baileys versions emit no separate connecting event. Keep a guarded
-    // fallback, but never run it against a replaced socket.
-    setTimeout(() => {
-      if (generation === socketGeneration && currentSock === sock) {
-        scheduleConsolePairing(currentSock, generation);
+      // Unwrap ephemeral wrapper
+      msg.message =
+        Object.keys(msg.message)[0] === 'ephemeralMessage'
+          ? msg.message.ephemeralMessage.message
+          : msg.message;
+
+      // Status broadcast — auto-view
+      if (msg.key?.remoteJid === 'status@broadcast') {
+        if (config.AUTO_STATUS_VIEW) await autostatus.handle(sock, msg);
+        return;
       }
-    }, 5000);
-  }
 
-  // ── MESSAGES: UPSERT ─────────────────────────────────────────
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
+      // Store for anti-delete / anti-edit
+      antidelete.storeMessage(msg);
+      antiedit.storeMessage(msg);
 
-    for (const msg of messages) {
-      try {
-        // Store for anti-delete
-        antidelete.storeMessage(msg);
-        // Store original for anti-edit
-        antiedit.storeOriginal(msg);
-        // Store view-once
-        storeViewOnce(msg);
-        // Auto status view
-        await autostatus.handleStatusUpdate(sock, msg);
-        // AI reply for DMs
-        await handleAIReply(sock, msg);
+      // Store view-once references
+      if (config.ANTI_VIEW_ONCE) storeViewOnce(msg);
 
-        // ── COMMAND ROUTING ──────────────────────────────────
-        const text = getMessageText(msg);
-        if (!text.startsWith(config.PREFIX)) continue;
+      const text   = getMessageText(msg);
+      const parsed = text ? parseCommand(text, config.PREFIX) : null;
 
-        const parsed = parseCommand(text, config.PREFIX);
-        if (!parsed) continue;
+      // ── Owner commands ────────────────────────────────────────────────────
+      if (parsed) {
+        const { command } = parsed;
 
-        const { command, args, body } = parsed;
-        const ctx = { command, args, body };
-
-        // Route to plugins
-        switch (command) {
-          // Bio
-          case 'setbio':
-          case 'autobio':
-          case 'quotebio':
-            await handleSetBio(sock, msg, ctx);
-            break;
-
-          // DP
-          case 'setdp':
-            await handleSetDp(sock, msg, ctx);
-            break;
-
-          // TikTok
-          case 'tiktok':
-          case 'tt':
-            await handleTikTok(sock, msg, ctx);
-            break;
-
-          case 'tiktokaudio':
-          case 'tta':
-            await handleTikTok(sock, msg, { ...ctx, command: 'tiktokaudio' });
-            break;
-
-          // Shazam
-          case 'shazam':
-            await handleShazam(sock, msg, ctx);
-            break;
-
-          // Update / restart
-          case 'update':
-          case 'redeploy':
-          case 'restart':
-            await handleUpdate(sock, msg, ctx);
-            break;
-
-          // AI controls
-          case 'aionall':
-          case 'aialloff':
-          case 'aion':
-          case 'aioff':
-            await handleAICommand(sock, msg, ctx);
-            break;
-
-          // View-once reveal
-          case 'vv':
-            await handleVV(sock, msg, ctx);
-            break;
-
-          // Get profile picture
-          case 'getdp':
-          case 'getpp':
-            await handleGetDp(sock, msg, ctx);
-            break;
-
-          // Help
-          case 'help':
-          case 'menu':
-            await sendHelp(sock, msg);
-            break;
-
-          // Ping
-          case 'ping':
-            await reply(sock, msg, `🏓 Pong! _${Date.now()}ms_`);
-            break;
-
-          default:
-            break;
+        if (command === 'help' || command === 'menu') {
+          await sendHelp(sock, msg);
+          return;
         }
-      } catch (err) {
-        console.error('[Bot] Message handler error:', err.message);
+        if (command === 'ping') {
+          await reply(sock, msg, '🏓 Pong! Bot is alive.');
+          return;
+        }
+        if (['restart', 'reboot'].includes(command)) {
+          if (!isOwner(msg)) { await reply(sock, msg, '❌ Owner only.'); return; }
+          await reply(sock, msg, '🔄 Restarting... session preserved.');
+          setTimeout(() => process.exit(0), 2000);
+          return;
+        }
+
+        if (await handleAICommand(sock, msg, parsed)) return;
+        if (await handleSetBio(sock, msg, parsed)) return;
+        if (await handleSetDp(sock, msg, parsed)) return;
+        if (await handleTikTok(sock, msg, parsed)) return;
+        if (await handleShazam(sock, msg, parsed)) return;
+        if (await handleUpdate(sock, msg, parsed)) return;
+        if (await handleVV(sock, msg, parsed)) return;
+        if (await handleGetDp(sock, msg, parsed)) return;
       }
+
+      // ── AI auto-reply ─────────────────────────────────────────────────────
+      if (config.AI_ENABLED) await handleAIReply(sock, msg);
+
+    } catch (err) {
+      console.error('[Message handler]', err.message);
     }
   });
 
-  // ── MESSAGE UPDATES (deletions & edits) ──────────────────────
+  // ── Message deletions ──────────────────────────────────────────────────────
   sock.ev.on('messages.update', async (updates) => {
     for (const update of updates) {
-      try {
-        // Anti-delete: protocol message with revoke type
-        if (update.update?.message?.protocolMessage?.type === 0) {
-          await antidelete.handleDelete(sock, {
-            key: update.update.message.protocolMessage.key,
-          });
-        }
-        // Anti-edit: protocol message with edit type
-        if (update.update?.message?.protocolMessage?.type === 14) {
-          const fakeMsg = {
-            key: update.key,
-            message: update.update.message,
-          };
-          await antiedit.handleEdit(sock, fakeMsg);
-        }
-      } catch (err) {
-        console.error('[Update] Handler error:', err.message);
-      }
-    }
-  });
-
-  // ── MESSAGE DELETE EVENTS ─────────────────────────────────────
-  sock.ev.on('messages.delete', async (item) => {
-    try {
-      if ('keys' in item) {
-        for (const key of item.keys) {
-          await antidelete.handleDelete(sock, { key });
-        }
-      }
-    } catch (err) {
-      console.error('[Delete] Handler error:', err.message);
+      await antidelete.handleDelete(sock, update);
+      await antiedit.handleEdit(sock, update);
     }
   });
 
   return sock;
 }
 
-async function generateConsolePairingCode(socket, generation, attempt = 1) {
-  if (generation !== socketGeneration || socket !== sock) return;
-  if (socket.__trailerPairingStarted || socket.__trailerAuthState?.creds?.registered) return;
-  if (socket.__trailerConnection === 'close' || socket.__trailerConnection === 'open') return;
-  socket.__trailerPairingStarted = true;
-
+// ─── Pairing (MEGA-MD proven approach, Trailer identity) ─────────────────────
+async function doPairing(sock, state, attempt = 1) {
   try {
-    const phone = await getPairingPhone();
-    if (generation !== socketGeneration || socket !== sock) return;
-    if (socket.__trailerConnection === 'close' || socket.__trailerConnection === 'open') return;
+    let phoneInput = config.PAIRING_NUMBER;
 
-    const code = await socket.requestPairingCode(phone);
-    if (!code) throw new Error('WhatsApp returned an empty pairing code.');
-    if (
-      generation !== socketGeneration ||
-      socket !== sock ||
-      socket.__trailerConnection === 'close' ||
-      socket.__trailerConnection === 'open' ||
-      socket.__trailerAuthState?.creds?.registered
-    ) {
-      return;
+    if (!phoneInput) {
+      if (rl && !rlClosed) {
+        phoneInput = await question(
+          chalk.bgBlack(chalk.greenBright(
+            `\n📱 Enter your WhatsApp number (country code, no + or spaces)\n` +
+            `   Example: 256706106326\n» `
+          ))
+        );
+      } else {
+        phoneInput = config.OWNER_NUMBER;
+        printLog('info', `No console input — using OWNER_NUMBER as pairing target`);
+      }
     }
 
-    const formatted = code.match(/.{1,4}/g)?.join('-') || code;
-    closePairingReadline();
+    phoneInput = phoneInput.replace(/\D/g, '');
 
-    console.log('\n╔══════════════════════════════════════════╗');
-    console.log('║  ✅ WHATSAPP PAIRING CODE                ║');
-    console.log('╠══════════════════════════════════════════╣');
-    console.log(`║  ${String(formatted).padEnd(40)}║`);
-    console.log('╠══════════════════════════════════════════╣');
-    console.log('║  Enter it immediately on your phone:    ║');
-    console.log('║  WhatsApp → Linked Devices → Link device ║');
-    console.log('║  → Link with phone number instead        ║');
-    console.log('╚══════════════════════════════════════════╝\n');
-  } catch (error) {
-    socket.__trailerPairingStarted = false;
-    const message = error?.message || String(error);
-    console.error(`[Pairing] Attempt ${attempt}/3 failed: ${message}`);
+    // Validate with awesome-phonenumber (the same library MEGA-MD uses)
+    const pn = parsePhoneNumber(`+${phoneInput}`);
+    if (!pn.valid) {
+      printLog('error', `Invalid phone number "${phoneInput}". Include country code, no leading zero.`);
+      if (rl && !rlClosed) rl.close();
+      process.exit(1);
+    }
 
-    if (generation !== socketGeneration || socket !== sock) return;
-    if (attempt < 3 && !socket.__trailerAuthState?.creds?.registered) {
-      const retryDelay = attempt * 3000;
-      console.log(`[Pairing] Retrying this active socket in ${retryDelay / 1000}s...`);
-      socket.__trailerPairingRetryTimer = setTimeout(() => {
-        socket.__trailerPairingRetryTimer = null;
-        if (generation === socketGeneration && socket === sock) {
-          generateConsolePairingCode(socket, generation, attempt + 1);
-        }
-      }, retryDelay);
+    printLog('info', `Requesting pairing code for ...${phoneInput.slice(-4)}`);
+    let code = await sock.requestPairingCode(phoneInput);
+    code = code?.match(/.{1,4}/g)?.join('-') || code;
+
+    printLog('success', `Pairing code: ${chalk.greenBright.bold(code)}`);
+    console.log(chalk.gray('\nOpen WhatsApp → Linked Devices → Link a device → Link with phone number instead\n'));
+
+    if (rl && !rlClosed) { rl.close(); rl = null; }
+
+  } catch (err) {
+    printLog('error', `Pairing attempt ${attempt}/3 failed: ${err.message}`);
+
+    if (attempt < 3) {
+      // Clear partial session and create a fresh socket — same strategy as MEGA-MD
+      try { fs.rmSync(SESSION_DIR, { recursive: true, force: true }); } catch (_) {}
+      fs.mkdirSync(SESSION_DIR, { recursive: true });
+      printLog('info', 'Cleared session — restarting connection for a fresh pairing attempt...');
+      await delay(3000);
+      connectToWhatsApp();
     } else {
-      console.error('[Pairing] No usable code was returned after three attempts.');
-      console.error('[Pairing] Check that Wispbyte is using Node.js 20+ and restart only after reviewing this error.');
+      printLog('error', 'All 3 pairing attempts failed. Restart the bot and try again.');
     }
   }
 }
 
+// ─── Help menu ────────────────────────────────────────────────────────────────
 async function sendHelp(sock, msg) {
   const prefix = config.PREFIX;
   const text =
@@ -511,26 +365,26 @@ async function sendHelp(sock, msg) {
     `▸ ${prefix}update — Pull latest updates from GitHub\n` +
     `▸ ${prefix}restart — Restart bot (session preserved)\n` +
     `▸ ${prefix}ping — Check if bot is alive\n\n` +
-    `_Owner only commands marked with 🔒_`;
+    `_Owner-only commands marked with 🔒_`;
 
   await reply(sock, msg, text);
 }
 
-// ── BOOT ─────────────────────────────────────────────────────────
+// ─── Boot ─────────────────────────────────────────────────────────────────────
 async function main() {
-  console.log('╔══════════════════════════════════╗');
-  console.log(`║  🤖 ${config.BOT_NAME.padEnd(28)} ║`);
-  console.log('║  Starting up...                  ║');
-  console.log('╚══════════════════════════════════╝\n');
+  console.log(chalk.green.bold('\n╔══════════════════════════════════╗'));
+  console.log(chalk.green.bold(`║  🤖 ${config.BOT_NAME.padEnd(28)} ║`));
+  console.log(chalk.green.bold('║  Starting up...                  ║'));
+  console.log(chalk.green.bold('╚══════════════════════════════════╝\n'));
 
-  clearStaleUnregisteredSession();
   startServer();
   await connectToWhatsApp();
 }
 
+process.on('uncaughtException',  err => { printLog('error', `Uncaught: ${err.message}`); console.error(err.stack); });
+process.on('unhandledRejection', err => { printLog('error', `Unhandled: ${err?.message}`); });
+
 main().catch(err => {
-  console.error('[Fatal]', err);
+  printLog('error', err.message);
   process.exit(1);
 });
-
-module.exports = { connectToWhatsApp };

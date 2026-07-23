@@ -1,18 +1,22 @@
-FROM node:20-bookworm-slim
+FROM node:20-slim
+
+# Install system deps needed by sharp / canvas
+RUN apt-get update && apt-get install -y \
+    libvips-dev \
+    ffmpeg \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY package.json ./
-RUN npm install --omit=dev --no-audit --no-fund
+RUN npm install --omit=dev
 
 COPY . .
 
-RUN mkdir -p /app/auth_info_baileys
+# Session folder
+RUN mkdir -p session
 
 EXPOSE 5000
 
-CMD ["npm", "run", "start:optimized"]
+CMD ["node", "--max-old-space-size=512", "index.js"]

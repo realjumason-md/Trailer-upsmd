@@ -1,146 +1,81 @@
 /**
- * ANTI-DELETE PLUGIN
- * Detects deleted messages and forwards the original to the owner (or same chat)
+ * ANTI-DELETE — stores messages and re-sends deleted ones
  */
 
-const config = require('../config');
-const { sendToOwner, jidToNumber, getMessageType } = require('../lib/utils');
-const { downloadMediaMessage } = require('@whiskeysockets/baileys');
+import { downloadMediaMessage } from '@whiskeysockets/baileys';
+import pino from 'pino';
+import config from '../config.js';
+import { sendToOwner, jidToNumber, getMessageType } from '../lib/utils.js';
 
-// In-memory store: { messageId -> { msg, chat, sender, timestamp } }
-const messageStore = new Map();
-const MAX_STORE = 2000; // keep last 2000 messages
+const store   = new Map(); // id → { msg, chat, sender, timestamp }
+const MAX     = 2000;
 
-function storeMessage(msg) {
+export function storeMessage(msg) {
   if (!msg.message || !msg.key.id) return;
-  // Don't store protocol/stub messages
   const type = Object.keys(msg.message)[0];
   if (type === 'protocolMessage' || type === 'messageContextInfo') return;
 
-  // Evict oldest when full
-  if (messageStore.size >= MAX_STORE) {
-    const firstKey = messageStore.keys().next().value;
-    messageStore.delete(firstKey);
-  }
+  if (store.size >= MAX) store.delete(store.keys().next().value);
 
-  messageStore.set(msg.key.id, {
-    msg: JSON.parse(JSON.stringify(msg)),
-    chat: msg.key.remoteJid,
-    sender: msg.key.participant || msg.key.remoteJid,
+  store.set(msg.key.id, {
+    msg:       JSON.parse(JSON.stringify(msg)),
+    chat:      msg.key.remoteJid,
+    sender:    msg.key.participant || msg.key.remoteJid,
     timestamp: Date.now(),
   });
 }
 
-async function handleDelete(sock, deletedMsg) {
+export async function handleDelete(sock, update) {
   if (!config.ANTI_DELETE) return;
 
-  const { id } = deletedMsg.key || {};
-  if (!id) return;
+  const { key, update: upd } = update;
+  if (!key || !upd?.messageStubType) return;
 
-  const stored = messageStore.get(id);
+  // messageStubType 1 = revoke
+  const isRevoke =
+    upd.messageStubType === 1 ||
+    (upd.message?.protocolMessage?.type === 0);
+
+  if (!isRevoke) return;
+
+  const id      = key.id;
+  const stored  = store.get(id);
   if (!stored) return;
 
   const { msg, chat, sender } = stored;
-  const senderNum = jidToNumber(sender);
-  const chatNum = jidToNumber(chat);
-  const isGroup = chat.endsWith('@g.us');
+  const text    = getMessageText(msg);
+  const type    = getMessageType(msg);
+  const deleted_by = sender === msg.key.fromMe ? 'You (bot)' : jidToNumber(sender);
+  const in_chat    = jidToNumber(chat);
 
-  const header =
-    `╔══════════════════════╗\n` +
-    `║  🗑️  DELETED MESSAGE   ║\n` +
-    `╚══════════════════════╝\n\n` +
-    `👤 *Sender:* +${senderNum}\n` +
-    `💬 *Chat:* ${isGroup ? `Group (${chatNum})` : `DM`}\n` +
-    `🕐 *Time:* ${new Date().toLocaleString()}\n` +
-    `─────────────────────────\n`;
+  const caption =
+    `🔴 *Anti-Delete Alert*\n` +
+    `👤 Deleted by: ${deleted_by}\n` +
+    `💬 Chat: ${in_chat}\n` +
+    `📅 Time: ${new Date(stored.timestamp).toLocaleString()}\n` +
+    (text ? `\n📝 *Message:*\n${text}` : '');
 
-  const targetJid =
-    config.ANTI_DELETE_SEND_TO === 'owner'
-      ? `${config.OWNER_NUMBER}@s.whatsapp.net`
-      : chat;
+  const dest = config.ANTI_DELETE_SEND_TO === 'same_chat'
+    ? chat
+    : `${config.OWNER_NUMBER}@s.whatsapp.net`;
 
   try {
-    const type = getMessageType(msg);
+    if (['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage', 'stickerMessage'].includes(type)) {
+      const buffer = await downloadMediaMessage(msg, 'buffer', {}, {
+        logger: pino({ level: 'silent' }),
+        reuploadRequest: sock.updateMediaMessage,
+      }).catch(() => null);
 
-    if (!type || type === 'conversation' || type === 'extendedTextMessage') {
-      // Text message
-      const text =
-        msg.message?.conversation ||
-        msg.message?.extendedTextMessage?.text ||
-        '[no text]';
-      await sock.sendMessage(targetJid, {
-        text: header + `📝 *Message:*\n${text}`,
-      });
-    } else if (type === 'imageMessage') {
-      try {
-        const buffer = await downloadMediaMessage(msg, 'buffer', {}, {
-          logger: require('pino')({ level: 'silent' }),
-          reuploadRequest: sock.updateMediaMessage,
-        });
-        const caption =
-          header + (msg.message.imageMessage?.caption ? `\n📝 ${msg.message.imageMessage.caption}` : '');
-        await sock.sendMessage(targetJid, {
-          image: buffer,
-          caption,
-        });
-      } catch {
-        await sock.sendMessage(targetJid, { text: header + '🖼️ [Image — could not download]' });
+      if (buffer) {
+        const mediaType = type.replace('Message', '');
+        await sock.sendMessage(dest, { [mediaType]: buffer, caption });
+        return;
       }
-    } else if (type === 'videoMessage') {
-      try {
-        const buffer = await downloadMediaMessage(msg, 'buffer', {}, {
-          logger: require('pino')({ level: 'silent' }),
-          reuploadRequest: sock.updateMediaMessage,
-        });
-        const caption =
-          header + (msg.message.videoMessage?.caption ? `\n📝 ${msg.message.videoMessage.caption}` : '');
-        await sock.sendMessage(targetJid, {
-          video: buffer,
-          caption,
-        });
-      } catch {
-        await sock.sendMessage(targetJid, { text: header + '🎥 [Video — could not download]' });
-      }
-    } else if (type === 'audioMessage' || type === 'pttMessage') {
-      try {
-        const buffer = await downloadMediaMessage(msg, 'buffer', {}, {
-          logger: require('pino')({ level: 'silent' }),
-          reuploadRequest: sock.updateMediaMessage,
-        });
-        await sock.sendMessage(targetJid, {
-          audio: buffer,
-          mimetype: 'audio/ogg; codecs=opus',
-          ptt: type === 'pttMessage',
-        });
-        await sock.sendMessage(targetJid, { text: header + '🎵 [Voice/Audio deleted]' });
-      } catch {
-        await sock.sendMessage(targetJid, { text: header + '🎵 [Audio — could not download]' });
-      }
-    } else if (type === 'stickerMessage') {
-      try {
-        const buffer = await downloadMediaMessage(msg, 'buffer', {}, {
-          logger: require('pino')({ level: 'silent' }),
-          reuploadRequest: sock.updateMediaMessage,
-        });
-        await sock.sendMessage(targetJid, { sticker: buffer });
-        await sock.sendMessage(targetJid, { text: header + '🎭 [Sticker deleted]' });
-      } catch {
-        await sock.sendMessage(targetJid, { text: header + '🎭 [Sticker — could not download]' });
-      }
-    } else if (type === 'documentMessage') {
-      await sock.sendMessage(targetJid, {
-        text: header + `📄 [Document deleted: ${msg.message.documentMessage?.fileName || 'unknown'}]`,
-      });
-    } else {
-      await sock.sendMessage(targetJid, {
-        text: header + `📦 [Deleted message type: ${type}]`,
-      });
     }
-
-    messageStore.delete(id);
+    if (caption) await sock.sendMessage(dest, { text: caption });
   } catch (err) {
-    console.error('[AntiDelete] Error forwarding deleted message:', err.message);
+    console.error('[anti-delete]', err.message);
   }
 }
 
-module.exports = { storeMessage, handleDelete };
+export default { storeMessage, handleDelete };

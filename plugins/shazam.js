@@ -1,96 +1,72 @@
 /**
- * SHAZAM PLUGIN
- * .shazam — reply to an audio/voice/video message to identify the song
+ * SHAZAM — identify a song from an audio/voice message
  */
 
-const axios = require('axios');
-const { isOwner, reply, reactTo, downloadMedia, getMessageType } = require('../lib/utils');
-const { downloadMediaMessage } = require('@whiskeysockets/baileys');
-const config = require('../config');
+import axios from 'axios';
+import FormData from 'form-data';
+import { downloadMediaMessage } from '@whiskeysockets/baileys';
+import pino from 'pino';
+import { reply } from '../lib/utils.js';
 
-async function recognizeSong(audioBuffer) {
-  // Use audd.io free tier (no key needed for basic use)
-  const FormData = require('form-data');
-  const form = new FormData();
-  form.append('file', audioBuffer, { filename: 'audio.mp3', contentType: 'audio/mpeg' });
-  form.append('return', 'apple_music,spotify');
+export async function handleShazam(sock, msg, parsed) {
+  if (parsed?.command !== 'shazam') return false;
 
-  const res = await axios.post('https://api.audd.io/', form, {
-    headers: form.getHeaders(),
-    timeout: 30000,
-  });
+  const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+  const audioMsg = quoted?.audioMessage || quoted?.videoMessage;
 
-  return res.data;
-}
-
-async function handleShazam(sock, msg, { command }) {
-  if (command !== 'shazam') return;
-
-  await reactTo(sock, msg, '⏳');
-
-  // Get the message to process — either this message or the quoted one
-  let targetMsg = msg;
-  const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-
-  if (quotedMsg) {
-    const qType = Object.keys(quotedMsg)[0];
-    if (['audioMessage', 'videoMessage', 'pttMessage'].includes(qType)) {
-      // Build a fake message object for downloading
-      targetMsg = {
-        key: {
-          ...msg.key,
-          id: msg.message?.extendedTextMessage?.contextInfo?.stanzaId || msg.key.id,
-        },
-        message: quotedMsg,
-      };
-    }
+  if (!audioMsg) {
+    await reply(sock, msg, '❌ Reply to an audio/voice message with .shazam');
+    return true;
   }
 
-  const type = targetMsg === msg ? getMessageType(msg) : Object.keys(targetMsg.message)[0];
-
-  if (!['audioMessage', 'videoMessage', 'pttMessage'].includes(type)) {
-    await reactTo(sock, msg, '❌');
-    return reply(
-      sock, msg,
-      '❌ Please reply to an audio, voice note, or video message with .shazam'
-    );
-  }
+  await reply(sock, msg, '🎵 Identifying song...');
 
   try {
-    const buffer = await downloadMediaMessage(targetMsg, 'buffer', {}, {
-      logger: require('pino')({ level: 'silent' }),
+    const quotedFull = {
+      key: {
+        remoteJid: msg.key.remoteJid,
+        id:        msg.message.extendedTextMessage.contextInfo.stanzaId,
+        fromMe:    false,
+      },
+      message: { audioMessage: audioMsg },
+    };
+
+    const buffer = await downloadMediaMessage(quotedFull, 'buffer', {}, {
+      logger: pino({ level: 'silent' }),
       reuploadRequest: sock.updateMediaMessage,
     });
 
-    if (!buffer) {
-      await reactTo(sock, msg, '❌');
-      return reply(sock, msg, '❌ Could not download audio.');
+    const form = new FormData();
+    form.append('file', buffer, { filename: 'audio.ogg', contentType: 'audio/ogg' });
+
+    const { data } = await axios.post(
+      'https://shazam-api6.p.rapidapi.com/shazam/recognize/',
+      form,
+      {
+        headers: {
+          ...form.getHeaders(),
+          'x-rapidapi-host': 'shazam-api6.p.rapidapi.com',
+          'x-rapidapi-key':  process.env.RAPIDAPI_KEY || '',
+        },
+        timeout: 30000,
+      }
+    );
+
+    const track = data?.track;
+    if (!track) {
+      await reply(sock, msg, '❌ Song not recognized. Make sure the audio is clear.');
+      return true;
     }
 
-    const result = await recognizeSong(buffer);
-
-    if (!result || result.status !== 'success' || !result.result) {
-      await reactTo(sock, msg, '🔍');
-      return reply(sock, msg, '🔍 Song not recognized. Try a clearer audio clip.');
-    }
-
-    const song = result.result;
-    const text =
+    await reply(sock, msg,
       `🎵 *Song Identified!*\n\n` +
-      `🎶 *Title:* ${song.title}\n` +
-      `🎤 *Artist:* ${song.artist}\n` +
-      `💿 *Album:* ${song.album || 'N/A'}\n` +
-      `📅 *Release:* ${song.release_date || 'N/A'}\n` +
-      (song.spotify?.external_urls?.spotify ? `\n🟢 *Spotify:* ${song.spotify.external_urls.spotify}` : '') +
-      (song.apple_music?.url ? `\n🍎 *Apple Music:* ${song.apple_music.url}` : '') +
-      `\n\n_Identified by ${config.BOT_NAME} 🎵_`;
-
-    await reactTo(sock, msg, '✅');
-    return reply(sock, msg, text);
+      `🎶 Title:  ${track.title}\n` +
+      `🎤 Artist: ${track.subtitle}\n` +
+      `💿 Album:  ${track.sections?.[0]?.metadata?.find(m => m.title === 'Album')?.text || '—'}\n` +
+      `📅 Year:   ${track.sections?.[0]?.metadata?.find(m => m.title === 'Released')?.text || '—'}`
+    );
   } catch (err) {
-    await reactTo(sock, msg, '❌');
-    return reply(sock, msg, `❌ Shazam error: ${err.message}`);
+    await reply(sock, msg, `❌ Shazam failed: ${err.message}`);
   }
+  return true;
 }
-
-module.exports = { handleShazam };

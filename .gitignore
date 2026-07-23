@@ -1,11 +1,21 @@
+# Dependencies
 node_modules/
+
+# Session — never commit credentials
+session/
 auth_info_baileys/
+
+# Environment
 .env
+
+# Logs
 *.log
-*.session
-store/
-baileys_store.json
-pnpm-lock.yaml
-yarn.lock
-package-lock.yaml
+logs/
+
+# Temp / media
+temp/
+tmp/
+
+# OS
 .DS_Store
+Thumbs.db

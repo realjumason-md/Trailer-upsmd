@@ -1,100 +1,52 @@
 /**
- * TIKTOK PLUGIN
- * .tiktok <url>  — download TikTok video (no watermark)
- * .tiktokaudio <url> — download TikTok audio only
+ * TIKTOK DOWNLOADER
  */
 
-const axios = require('axios');
-const config = require('../config');
-const { isOwner, reply, reactTo } = require('../lib/utils');
+import axios from 'axios';
+import config from '../config.js';
+import { isOwner, reply } from '../lib/utils.js';
 
-async function fetchTikTok(url) {
-  // Try tikwm.com API (free, no key needed)
-  const res = await axios.post(
-    'https://www.tikwm.com/api/',
-    new URLSearchParams({ url, hd: '1' }),
-    {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      timeout: 30000,
-    }
-  );
-  return res.data;
-}
+export async function handleTikTok(sock, msg, parsed) {
+  const { command, args } = parsed;
+  if (!['tiktok', 'tiktokaudio', 'tt'].includes(command)) return false;
 
-async function downloadBuffer(url) {
-  const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 60000 });
-  return Buffer.from(res.data);
-}
-
-async function handleTikTok(sock, msg, { command, body }) {
-  if (!['tiktok', 'tiktokaudio', 'tt', 'tta'].includes(command)) return;
-
-  const url = body.trim();
-  if (!url || !url.includes('tiktok')) {
-    return reply(sock, msg, '❌ Please provide a valid TikTok URL.\n\nExample: .tiktok https://vt.tiktok.com/xxxxx');
+  const url = args[0];
+  if (!url) {
+    await reply(sock, msg, `❌ Usage: ${config.PREFIX}tiktok <url>`);
+    return true;
   }
 
-  await reactTo(sock, msg, '⏳');
+  await reply(sock, msg, '⏳ Fetching TikTok media...');
 
   try {
-    const data = await fetchTikTok(url);
+    const { data } = await axios.get(config.TIKTOK_API, {
+      params: { url, hd: 1 },
+      timeout: 30000,
+    });
 
-    if (!data || data.code !== 0 || !data.data) {
-      return reply(sock, msg, '❌ Failed to fetch TikTok data. The link may be invalid or private.');
-    }
+    if (!data?.data) throw new Error('No data returned from API');
 
-    const info = data.data;
-    const title = info.title || 'TikTok';
-    const author = info.author?.nickname || 'Unknown';
-    const plays = info.play_count?.toLocaleString() || '?';
-    const likes = info.digg_count?.toLocaleString() || '?';
+    const d    = data.data;
+    const isAudio = command === 'tiktokaudio';
 
-    if (command === 'tiktok' || command === 'tt') {
-      // Video
-      const videoUrl = info.play || info.hdplay;
-      if (!videoUrl) return reply(sock, msg, '❌ Could not get video URL.');
-
-      const videoBuffer = await downloadBuffer(videoUrl);
-      const caption =
-        `🎵 *${title}*\n` +
-        `👤 *@${author}*\n` +
-        `▶️ ${plays} plays  ❤️ ${likes} likes\n\n` +
-        `_Downloaded by ${config.BOT_NAME}_`;
-
-      await sock.sendMessage(
-        msg.key.remoteJid,
-        { video: videoBuffer, caption },
-        { quoted: msg }
-      );
+    if (isAudio) {
+      const audioUrl = d.music_info?.play || d.hdplay || d.play;
+      if (!audioUrl) throw new Error('No audio found');
+      await sock.sendMessage(msg.key.remoteJid, {
+        audio:    { url: audioUrl },
+        mimetype: 'audio/mp4',
+        caption:  `🎵 ${d.title || 'TikTok Audio'}`,
+      }, { quoted: msg });
     } else {
-      // Audio only
-      const audioUrl = info.music || info.music_info?.play;
-      if (!audioUrl) return reply(sock, msg, '❌ Could not get audio URL.');
-
-      const audioBuffer = await downloadBuffer(audioUrl);
-      const caption =
-        `🎵 *${info.music_info?.title || title}*\n` +
-        `👤 *${info.music_info?.author || author}*\n\n` +
-        `_Downloaded by ${config.BOT_NAME}_`;
-
-      await sock.sendMessage(
-        msg.key.remoteJid,
-        {
-          audio: audioBuffer,
-          mimetype: 'audio/mpeg',
-          ptt: false,
-          fileName: `${title}.mp3`,
-        },
-        { quoted: msg }
-      );
-      await reply(sock, msg, caption);
+      const videoUrl = d.hdplay || d.play;
+      if (!videoUrl) throw new Error('No video found');
+      await sock.sendMessage(msg.key.remoteJid, {
+        video:   { url: videoUrl },
+        caption: `🎬 ${d.title || 'TikTok Video'}\n👤 ${d.author?.nickname || ''}`,
+      }, { quoted: msg });
     }
-
-    await reactTo(sock, msg, '✅');
   } catch (err) {
-    await reactTo(sock, msg, '❌');
-    return reply(sock, msg, `❌ Error: ${err.message}`);
+    await reply(sock, msg, `❌ TikTok download failed: ${err.message}`);
   }
+  return true;
 }
-
-module.exports = { handleTikTok };

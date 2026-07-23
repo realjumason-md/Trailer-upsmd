@@ -1,20 +1,14 @@
 /**
- * AUTO STATUS VIEW PLUGIN
- * Automatically views/reads all WhatsApp statuses
+ * AUTO STATUS VIEW — automatically views WhatsApp status updates
  */
 
-const config = require('../config');
-
-async function handleStatusUpdate(sock, msg) {
-  if (!config.AUTO_STATUS_VIEW) return;
-  if (msg.key.remoteJid !== 'status@broadcast') return;
-
+export async function handle(sock, msg) {
   try {
-    // Mark status as read
+    if (msg.key?.remoteJid !== 'status@broadcast') return;
     await sock.readMessages([msg.key]);
   } catch (err) {
-    // Silently ignore errors
+    console.error('[autostatus]', err.message);
   }
 }
 
-module.exports = { handleStatusUpdate };
+export default { handle };

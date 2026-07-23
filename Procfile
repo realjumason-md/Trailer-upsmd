@@ -1,1 +1,1 @@
-web: npm run start:optimized
+web: node --max-old-space-size=512 index.js

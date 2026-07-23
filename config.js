@@ -1,53 +1,48 @@
-require('dotenv').config();
+import 'dotenv/config';
 
-module.exports = {
-  // Bot owner WhatsApp number (no + or spaces, with country code)
+const config = {
+  // ── Bot identity ────────────────────────────────────────────────
+  BOT_NAME:    process.env.BOT_NAME    || 'Trailer-UPS BOT',
   OWNER_NUMBER: process.env.OWNER_NUMBER || '256706106326',
+  PREFIX:      process.env.PREFIX      || '.',
 
-  // Command prefix
-  PREFIX: process.env.PREFIX || '.',
+  // ── Session ─────────────────────────────────────────────────────
+  // SESSION_ID: base64-encoded creds.json from a paired session.
+  //   Leave blank to do fresh pairing via code or QR.
+  SESSION_ID:  process.env.SESSION_ID  || '',
+  SESSION_DIR: process.env.SESSION_DIR || './session',
 
-  // Bot display name
-  BOT_NAME: process.env.BOT_NAME || 'Trailer-UPS BOT',
+  // ── Pairing ─────────────────────────────────────────────────────
+  // PAIRING_NUMBER: phone with country code, no + or spaces.
+  //   When set the bot uses it automatically (no prompt needed).
+  //   When blank the bot prompts in the hosting console.
+  PAIRING_NUMBER: process.env.PAIRING_NUMBER || '',
 
-  // Session directory
-  SESSION_DIR: process.env.SESSION_DIR || './auth_info_baileys',
-
-  // Pairing method: console phone pairing or terminal QR
-  PAIRING_METHOD: process.env.PAIRING_METHOD || 'phone',
-
-  // Optional phone number for non-interactive hosts. When empty, the bot
-  // prompts for it in the hosting console on first startup.
-  PAIRING_PHONE: process.env.PAIRING_PHONE || '',
-
-  // Auto status view
+  // ── Features ────────────────────────────────────────────────────
   AUTO_STATUS_VIEW: process.env.AUTO_STATUS_VIEW !== 'false',
+  AUTO_BIO:         process.env.AUTO_BIO         !== 'false',
+  ANTI_DELETE:      process.env.ANTI_DELETE       !== 'false',
+  ANTI_EDIT:        process.env.ANTI_EDIT         !== 'false',
+  ANTI_VIEW_ONCE:   process.env.ANTI_VIEW_ONCE    !== 'false',
+  // Where to forward deleted messages: 'owner' or 'same_chat'
+  ANTI_DELETE_SEND_TO: process.env.ANTI_DELETE_SEND_TO || 'owner',
 
-  // Bio rotation (every 6 hours)
-  AUTO_BIO: process.env.AUTO_BIO !== 'false',
-
-  // Express server port
-  PORT: process.env.PORT || 5000,
-
-  // AI settings — Groq free tier by default
-  AI_ENABLED: process.env.AI_ENABLED === 'true',
-  AI_API_KEY: process.env.AI_API_KEY || '',
-  AI_MODEL: process.env.AI_MODEL || 'llama3-8b-8192',
-  AI_BASE_URL: process.env.AI_BASE_URL || 'https://api.groq.com/openai/v1',
+  // ── AI — Groq free tier by default ──────────────────────────────
+  AI_ENABLED:       process.env.AI_ENABLED === 'true',
+  AI_API_KEY:       process.env.AI_API_KEY  || '',
+  AI_MODEL:         process.env.AI_MODEL    || 'llama3-8b-8192',
+  AI_BASE_URL:      process.env.AI_BASE_URL || 'https://api.groq.com/openai/v1',
   AI_SYSTEM_PROMPT: process.env.AI_SYSTEM_PROMPT || 'You are a helpful WhatsApp assistant. Reply concisely.',
 
-  // GitHub repo for update plugin
-  GITHUB_REPO: process.env.GITHUB_REPO || 'realjumason-md/Trailer-upsmd',
+  // ── GitHub (for .update command) ────────────────────────────────
+  GITHUB_REPO:   process.env.GITHUB_REPO   || 'realjumason-md/Trailer-upsmd',
   GITHUB_BRANCH: process.env.GITHUB_BRANCH || 'main',
 
-  // Anti-delete / anti-edit settings
-  ANTI_DELETE: process.env.ANTI_DELETE !== 'false',
-  ANTI_EDIT: process.env.ANTI_EDIT !== 'false',
-  ANTI_DELETE_SEND_TO: process.env.ANTI_DELETE_SEND_TO || 'owner', // 'owner' or 'same_chat'
-
-  // Anti-view-once
-  ANTI_VIEW_ONCE: process.env.ANTI_VIEW_ONCE !== 'false',
-
-  // TikTok API
+  // ── TikTok ──────────────────────────────────────────────────────
   TIKTOK_API: process.env.TIKTOK_API || 'https://www.tikwm.com/api/',
+
+  // ── Server ──────────────────────────────────────────────────────
+  PORT: Number(process.env.PORT) || 5000,
 };
+
+export default config;

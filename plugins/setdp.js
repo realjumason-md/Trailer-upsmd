@@ -1,56 +1,39 @@
 /**
- * SET DP PLUGIN
- * .setdp — sets your WhatsApp profile picture
- * Usage: Send .setdp with an image attached, or reply to an image with .setdp
+ * SET DP — update the bot's WhatsApp profile picture
  */
 
-const config = require('../config');
-const { isOwner, reply, downloadMedia, getMessageType } = require('../lib/utils');
-const { downloadMediaMessage } = require('@whiskeysockets/baileys');
+import { downloadMediaMessage } from '@whiskeysockets/baileys';
+import pino from 'pino';
+import { isOwner, reply } from '../lib/utils.js';
 
-async function handleSetDp(sock, msg, { command }) {
-  if (command !== 'setdp') return;
-  if (!isOwner(msg)) return reply(sock, msg, '❌ Only the bot owner can use this command.');
-
-  let imgBuffer = null;
-  const type = getMessageType(msg);
-  const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-
-  // Check if image is attached to this message
-  if (type === 'imageMessage') {
-    imgBuffer = await downloadMedia(sock, msg);
-  }
-  // Check if replying to an image
-  else if (quotedMsg) {
-    const quotedType = Object.keys(quotedMsg)[0];
-    if (quotedType === 'imageMessage') {
-      const fakeMsg = {
-        key: msg.message.extendedTextMessage?.contextInfo?.stanzaId
-          ? { ...msg.key, id: msg.message.extendedTextMessage.contextInfo.stanzaId }
-          : msg.key,
-        message: quotedMsg,
-      };
-      try {
-        imgBuffer = await downloadMediaMessage(fakeMsg, 'buffer', {}, {
-          logger: require('pino')({ level: 'silent' }),
-          reuploadRequest: sock.updateMediaMessage,
-        });
-      } catch {
-        imgBuffer = null;
-      }
-    }
+export async function handleSetDp(sock, msg, parsed) {
+  if (parsed?.command !== 'setdp') return false;
+  if (!isOwner(msg)) {
+    await reply(sock, msg, '🔒 Owner only.');
+    return true;
   }
 
-  if (!imgBuffer) {
-    return reply(sock, msg, '❌ Please attach an image or reply to an image with .setdp');
+  // Accept: message with image attached, or a reply to an image
+  const target = msg.message?.imageMessage
+    ? msg
+    : msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage
+      ? { message: { imageMessage: msg.message.extendedTextMessage.contextInfo.quotedMessage.imageMessage }, key: { remoteJid: msg.key.remoteJid, fromMe: false, id: msg.message.extendedTextMessage.contextInfo.stanzaId } }
+      : null;
+
+  if (!target) {
+    await reply(sock, msg, '❌ Attach an image or reply to one with .setdp');
+    return true;
   }
 
   try {
-    await sock.updateProfilePicture(sock.user.id, imgBuffer);
-    return reply(sock, msg, '✅ Profile picture updated successfully! 🖼️');
+    const buffer = await downloadMediaMessage(target, 'buffer', {}, {
+      logger: pino({ level: 'silent' }),
+      reuploadRequest: sock.updateMediaMessage,
+    });
+    await sock.updateProfilePicture(sock.user.id, buffer);
+    await reply(sock, msg, '✅ Profile picture updated!');
   } catch (err) {
-    return reply(sock, msg, `❌ Failed to update profile picture: ${err.message}`);
+    await reply(sock, msg, `❌ Failed: ${err.message}`);
   }
+  return true;
 }
-
-module.exports = { handleSetDp };

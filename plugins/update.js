@@ -1,84 +1,63 @@
 /**
- * UPDATE / REDEPLOY PLUGIN
- * .update — pulls latest code from GitHub and restarts the bot (no re-pairing needed)
- * Session is preserved in auth_info_baileys folder
+ * UPDATE — pull latest code from GitHub and restart
  */
 
-const { execSync, spawn } = require('child_process');
-const config = require('../config');
-const { isOwner, reply, reactTo } = require('../lib/utils');
+import { execSync } from 'child_process';
+import config from '../config.js';
+import { isOwner, reply, reactTo } from '../lib/utils.js';
 
 function runCmd(cmd, opts = {}) {
-  return execSync(cmd, { encoding: 'utf8', ...opts }).trim();
+  return execSync(cmd, { encoding: 'utf8', timeout: opts.timeout || 60000 }).trim();
 }
 
-async function handleUpdate(sock, msg, { command }) {
-  if (!['update', 'redeploy', 'restart'].includes(command)) return;
-  if (!isOwner(msg)) return reply(sock, msg, '❌ Only the bot owner can use this command.');
-
-  await reactTo(sock, msg, '⏳');
+export async function handleUpdate(sock, msg, parsed) {
+  const { command } = parsed;
+  if (!['update', 'restart'].includes(command)) return false;
+  if (!isOwner(msg)) { await reply(sock, msg, '🔒 Owner only.'); return true; }
 
   if (command === 'restart') {
-    await reply(sock, msg, '🔄 Restarting bot... Session is preserved, no re-pairing needed.');
-    setTimeout(() => {
-      process.exit(0); // Process manager (PM2/Heroku/Wispbyte) will auto-restart
-    }, 2000);
-    return;
+    await reply(sock, msg, '🔄 Restarting bot... session is preserved.');
+    setTimeout(() => process.exit(0), 2000);
+    return true;
   }
 
-  if (command === 'update' || command === 'redeploy') {
-    await reply(sock, msg, '📥 Checking for updates from GitHub...');
+  // update
+  try {
+    await reactTo(sock, msg, '⏳');
+
+    let gitOutput = '';
+    try {
+      gitOutput = runCmd(`git fetch origin && git log HEAD..origin/${config.GITHUB_BRANCH} --oneline`, { timeout: 30000 });
+    } catch {
+      gitOutput = '';
+    }
+
+    if (!gitOutput) {
+      return reply(sock, msg, '✅ Already up to date — no updates found.');
+    }
+
+    await reply(sock, msg,
+      `📦 *Updates found:*\n\`\`\`\n${gitOutput}\n\`\`\`\n\n⬇️ Pulling updates...`
+    );
+
+    runCmd(`git pull origin ${config.GITHUB_BRANCH}`, { timeout: 60000 });
+    await reply(sock, msg, '📦 Installing dependencies...');
 
     try {
-      // Fetch remote info
-      let gitOutput = '';
-      try {
-        gitOutput = runCmd('git fetch origin && git log HEAD..origin/main --oneline', { timeout: 30000 });
-      } catch {
-        gitOutput = '';
-      }
+      const pm = (() => {
+        try { runCmd('which pnpm'); return 'pnpm'; } catch {}
+        try { runCmd('which yarn'); return 'yarn'; } catch {}
+        return 'npm';
+      })();
+      runCmd(`${pm} install`, { timeout: 120000 });
+    } catch {}
 
-      if (!gitOutput && command === 'update') {
-        return reply(sock, msg, '✅ Already up to date! No updates available.');
-      }
+    await reply(sock, msg, '✅ *Update complete!*\n🔄 Restarting bot now...');
+    setTimeout(() => process.exit(0), 3000);
 
-      await reply(sock, msg,
-        `📦 *Updates found:*\n\`\`\`\n${gitOutput || 'Applying updates...'}\n\`\`\`\n\n⬇️ Pulling updates...`
-      );
-
-      // Pull latest code
-      try {
-        runCmd('git pull origin main', { timeout: 60000 });
-      } catch (e) {
-        return reply(sock, msg, `❌ Git pull failed:\n${e.message}`);
-      }
-
-      await reply(sock, msg, '📦 Installing dependencies...');
-
-      // Install dependencies
-      try {
-        const pm = (() => {
-          try { runCmd('which pnpm'); return 'pnpm'; } catch {}
-          try { runCmd('which yarn'); return 'yarn'; } catch {}
-          return 'npm';
-        })();
-        runCmd(`${pm} install --frozen-lockfile 2>/dev/null || ${pm} install`, { timeout: 120000 });
-      } catch (e) {
-        // Non-fatal
-      }
-
-      await reply(sock, msg,
-        `✅ *Update complete!*\n\n🔄 Restarting bot now...\n_Session preserved — no re-pairing needed!_`
-      );
-
-      setTimeout(() => {
-        process.exit(0);
-      }, 3000);
-    } catch (err) {
-      await reactTo(sock, msg, '❌');
-      return reply(sock, msg, `❌ Update failed: ${err.message}`);
-    }
+  } catch (err) {
+    await reactTo(sock, msg, '❌');
+    await reply(sock, msg, `❌ Update failed: ${err.message}`);
   }
+  return true;
 }
-
-module.exports = { handleUpdate };
