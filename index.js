@@ -11,14 +11,14 @@ const {
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
-  isJidBroadcast,
+  Browsers,
 } = require('@whiskeysockets/baileys');
 
 const pino = require('pino');
 const path = require('path');
 const fs = require('fs');
 const config = require('./config');
-const { startServer, setBotSocket, setPairingCode } = require('./server');
+const { startServer, setBotSocket, setPairingCode, setConnected } = require('./server');
 const { startAutoBio } = require('./plugins/setbio');
 
 // Plugins
@@ -59,7 +59,7 @@ async function connectToWhatsApp() {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger),
     },
-    browser: ['Trailer-UPS-Bot', 'Chrome', '120.0.0'],
+    browser: Browsers.macOS('Safari'),
     markOnlineOnConnect: false,
     generateHighQualityLinkPreview: true,
     syncFullHistory: false,
@@ -103,6 +103,7 @@ async function connectToWhatsApp() {
     if (connection === 'open') {
       retryCount = 0;
       setPairingCode(null);
+      setConnected(true);
       console.log(`\n✅ Connected as: ${sock.user?.name} (+${sock.user?.id?.split(':')[0]})`);
       console.log(`🤖 Bot: ${config.BOT_NAME} is online!\n`);
 
@@ -111,6 +112,7 @@ async function connectToWhatsApp() {
     }
 
     if (connection === 'close') {
+      setConnected(false);
       const reason = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = reason !== DisconnectReason.loggedOut;
 
