@@ -1,0 +1,11 @@
+node_modules
+.git
+.github
+auth_info_baileys
+store
+temp
+logs
+coverage
+*.log
+.env
+.error.log*

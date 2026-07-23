@@ -3,8 +3,14 @@ services:
     name: trailer-upsmd-bot
     env: node
     buildCommand: npm install
-    startCommand: node index.js
-    plan: free
+    startCommand: npm run start:optimized
+    healthCheckPath: /health
+    autoDeploy: true
+    plan: starter
+    disk:
+      name: trailer-upsmd-session
+      mountPath: /opt/render/project/src/auth_info_baileys
+      sizeGB: 1
     envVars:
       - key: OWNER_NUMBER
         value: 256706106326
@@ -24,3 +30,5 @@ services:
         value: "true"
       - key: LOG_LEVEL
         value: silent
+      - key: PORT
+        value: "10000"

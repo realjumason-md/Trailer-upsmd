@@ -118,7 +118,10 @@ async function connectToWhatsApp() {
         process.exit(1);
       } else {
         console.log('[Connection] Max retries reached. Restarting process...');
-        process.exit(0);
+        // Exit non-zero so Railway, Render, Fly.io, Heroku, and other
+        // process managers restart the bot instead of treating this as a
+        // successful shutdown.
+        process.exit(1);
       }
     }
   });

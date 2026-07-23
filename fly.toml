@@ -1,0 +1,32 @@
+app = "trailer-upsmd"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "5000"
+  BOT_NAME = "Trailer-UPS BOT"
+  PAIRING_METHOD = "phone"
+  OWNER_NUMBER = "256706106326"
+  PAIRING_PHONE = "256706106326"
+  AUTO_STATUS_VIEW = "true"
+  AUTO_BIO = "true"
+  ANTI_DELETE = "true"
+  ANTI_EDIT = "true"
+  LOG_LEVEL = "silent"
+
+[http_service]
+  internal_port = 5000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+
+[[vm]]
+  memory = "1024mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[[mounts]]
+  source = "trailer_session"
+  destination = "/app/auth_info_baileys"

@@ -62,36 +62,64 @@ Once paired, the session is saved in `auth_info_baileys/`. You won't need to pai
 
 ## ☁️ Deployment
 
-### Vercel
+Trailer-upsmd is a long-running WhatsApp client. Use a host that keeps the
+Node.js process alive and preserves the `auth_info_baileys/` session directory.
+The complete platform configurations are included in [`DEPLOYMENT.md`](./DEPLOYMENT.md).
 
-1. Fork this repo
-2. Import to [vercel.com](https://vercel.com)
-3. Add env vars in Vercel dashboard
-4. Deploy → visit `/pair` endpoint to get your pairing code
-5. Re-deploy once paired to persist the session (set session as env var)
+### Render
 
-### Wispbyte
+1. Connect this GitHub repository.
+2. Let Render use `render.yaml`.
+3. Set `OWNER_NUMBER`, `PAIRING_PHONE`, and any optional API keys.
+4. Deploy on an always-on plan; the included disk preserves the WhatsApp session.
+5. Open the service URL and use the pairing page.
 
-1. Upload repo to Wispbyte
-2. Set `npm start` as the start command
-3. Add env vars in Wispbyte dashboard
-4. Start — pairing code shows in logs
+### Railway
 
-### Railway / Render
+1. Connect this repository; Railway will use `railway.json` and `Dockerfile`.
+2. Add `OWNER_NUMBER` and either `PAIRING_PHONE` or a paired session.
+3. Add a persistent volume mounted at `/app/auth_info_baileys`.
+4. Deploy and open the generated service URL to pair.
 
-1. Connect GitHub repo
-2. Set `node index.js` as start command
-3. Add env vars
-4. Deploy — pairing code shows in logs
+### Fly.io
+
+```bash
+fly launch --no-deploy
+fly volumes create trailer_session --region iad --size 1
+fly secrets set OWNER_NUMBER=256706106326 PAIRING_PHONE=256706106326
+fly deploy
+```
+
+The included `fly.toml` keeps the machine running and mounts the session volume.
 
 ### Heroku
 
+Heroku can run the bot with the included `heroku.yml` and `Procfile`, but its
+filesystem is not persistent. Use an external session strategy or expect to
+pair again after a dyno replacement.
+
+### Docker or a VPS
+
 ```bash
-heroku create your-bot-name
-heroku config:set OWNER_NUMBER=256706106326 PAIRING_PHONE=256706106326
-git push heroku main
-heroku logs --tail
+docker build -t trailer-upsmd .
+docker run -d --name trailer-upsmd --restart unless-stopped \
+  -p 5000:5000 \
+  -v trailer-upsmd-session:/app/auth_info_baileys \
+  -e OWNER_NUMBER=256706106326 \
+  -e PAIRING_PHONE=256706106326 \
+  trailer-upsmd
 ```
+
+### Replit
+
+Use Node.js 20, install dependencies with `npm install`, run
+`npm run start:optimized`, and keep `auth_info_baileys/` in persistent storage.
+
+### Why Vercel is not included
+
+Vercel functions are short-lived and do not provide a persistent local session
+directory, so they cannot reliably keep the WhatsApp socket and Baileys keys
+alive.
 
 ---
 

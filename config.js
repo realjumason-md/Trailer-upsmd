@@ -26,7 +26,7 @@ module.exports = {
   AUTO_BIO: process.env.AUTO_BIO !== 'false',
 
   // Express server port
-  PORT: process.env.PORT || 3000,
+  PORT: process.env.PORT || 5000,
 
   // AI settings — Groq free tier by default
   AI_ENABLED: process.env.AI_ENABLED === 'true',
