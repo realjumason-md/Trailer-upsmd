@@ -6,10 +6,16 @@ import axios from 'axios';
 import FormData from 'form-data';
 import { downloadMediaMessage } from '@whiskeysockets/baileys';
 import pino from 'pino';
+import config from '../config.js';
 import { reply } from '../lib/utils.js';
 
 export async function handleShazam(sock, msg, parsed) {
   if (parsed?.command !== 'shazam') return false;
+
+  if (!config.RAPIDAPI_KEY) {
+    await reply(sock, msg, '❌ Shazam is not configured. Set RAPIDAPI_KEY in your .env file.\nGet a free key at https://rapidapi.com (search for shazam-api6).');
+    return true;
+  }
 
   const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
   const audioMsg = quoted?.audioMessage || quoted?.videoMessage;
@@ -46,7 +52,7 @@ export async function handleShazam(sock, msg, parsed) {
         headers: {
           ...form.getHeaders(),
           'x-rapidapi-host': 'shazam-api6.p.rapidapi.com',
-          'x-rapidapi-key':  process.env.RAPIDAPI_KEY || '',
+          'x-rapidapi-key':  config.RAPIDAPI_KEY,
         },
         timeout: 30000,
       }

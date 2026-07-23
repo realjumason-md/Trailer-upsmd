@@ -40,6 +40,10 @@ const config = {
   GITHUB_REPO:   process.env.GITHUB_REPO   || 'realjumason-md/Trailer-upsmd',
   GITHUB_BRANCH: process.env.GITHUB_BRANCH || 'main',
 
+  // ── Shazam (RapidAPI) ────────────────────────────────────────────
+  // Free tier at https://rapidapi.com/search/shazam (shazam-api6 plan)
+  RAPIDAPI_KEY: process.env.RAPIDAPI_KEY || '',
+
   // ── TikTok ──────────────────────────────────────────────────────
   TIKTOK_API: process.env.TIKTOK_API || 'https://www.tikwm.com/api/',
 

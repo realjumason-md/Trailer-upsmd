@@ -6,7 +6,7 @@
 import { downloadMediaMessage } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import config from '../config.js';
-import { isOwner, reply, sendToOwner, jidToNumber, getMessageText, getMessageType } from '../lib/utils.js';
+import { isOwner, reply, jidToNumber, getMessageText, getMessageType } from '../lib/utils.js';
 
 const store = new Map(); // id → { msg, chat, sender, timestamp }
 const MAX   = 2000;

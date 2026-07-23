@@ -4,7 +4,7 @@
 
 import axios from 'axios';
 import config from '../config.js';
-import { isOwner, reply } from '../lib/utils.js';
+import { reply } from '../lib/utils.js';
 
 export async function handleTikTok(sock, msg, parsed) {
   const { command, args } = parsed;
@@ -32,10 +32,12 @@ export async function handleTikTok(sock, msg, parsed) {
     if (isAudio) {
       const audioUrl = d.music_info?.play || d.hdplay || d.play;
       if (!audioUrl) throw new Error('No audio found');
+      // WhatsApp audio messages don't support captions — send title as a separate text first
+      const audioTitle = `🎵 ${d.title || 'TikTok Audio'}`;
+      await reply(sock, msg, audioTitle);
       await sock.sendMessage(msg.key.remoteJid, {
         audio:    { url: audioUrl },
         mimetype: 'audio/mp4',
-        caption:  `🎵 ${d.title || 'TikTok Audio'}`,
       }, { quoted: msg });
     } else {
       const videoUrl = d.hdplay || d.play;

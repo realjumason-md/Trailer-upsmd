@@ -42,17 +42,43 @@ export async function handleVV(sock, msg, parsed) {
   }
 
   try {
-    const buffer = await downloadMediaMessage(stored, 'buffer', {}, {
+    const m = stored.message;
+
+    // Locate the view-once wrapper key (viewOnceMessage, viewOnceMessageV2, etc.)
+    const voKey = Object.keys(m).find(k =>
+      m[k]?.viewOnce ||
+      m[k]?.message?.imageMessage?.viewOnce ||
+      m[k]?.message?.videoMessage?.viewOnce
+    );
+
+    // Extract actual media type from inside the wrapper
+    let mediaType = 'image';
+    if (voKey) {
+      const inner = m[voKey];
+      if (inner?.message?.videoMessage || inner?.videoMessage) mediaType = 'video';
+      else if (inner?.message?.imageMessage || inner?.imageMessage) mediaType = 'image';
+    } else {
+      // Fallback: direct imageMessage / videoMessage (older Baileys format)
+      if (m.videoMessage) mediaType = 'video';
+    }
+
+    // Build a downloadable message — Baileys needs a proper WAMessage shape
+    let downloadTarget = stored;
+    if (voKey && m[voKey]?.message) {
+      // Unwrap the view-once envelope so downloadMediaMessage can locate the keys
+      downloadTarget = {
+        ...stored,
+        message: m[voKey].message,
+      };
+    }
+
+    const buffer = await downloadMediaMessage(downloadTarget, 'buffer', {}, {
       logger: pino({ level: 'silent' }),
       reuploadRequest: sock.updateMediaMessage,
     });
 
-    const m      = stored.message;
-    const voKey  = Object.keys(m).find(k => m[k]?.viewOnce);
-    const type   = voKey?.replace('Message', '') || 'image';
-
     await sock.sendMessage(jid, {
-      [type]: buffer,
+      [mediaType]: buffer,
       caption: '👁️ *View-once media revealed by bot*',
     });
     voStore.delete(jid);

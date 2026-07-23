@@ -15,13 +15,7 @@ export async function handleUpdate(sock, msg, parsed) {
   if (!['update', 'restart'].includes(command)) return false;
   if (!isOwner(msg)) { await reply(sock, msg, '🔒 Owner only.'); return true; }
 
-  if (command === 'restart') {
-    await reply(sock, msg, '🔄 Restarting bot... session is preserved.');
-    setTimeout(() => process.exit(0), 2000);
-    return true;
-  }
-
-  // update
+  // update (restart is handled earlier in index.js — this branch only runs for 'update')
   try {
     await reactTo(sock, msg, '⏳');
 
