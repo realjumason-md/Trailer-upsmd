@@ -34,7 +34,7 @@ import { handleAICommand, handleAIReply } from './plugins/ai.js';
 import { storeViewOnce, handleVV, handleAntiViewOnceCommand } from './plugins/antiviewonce.js';
 import { handleGetDp } from './plugins/getdp.js';
 import antidelete, { handleAntiDeleteCommand } from './plugins/antidelete.js';
-import antiedit, { handleAntiEditCommand } from './plugins/antiedit.js';
+import antiedit, { handleAntiEditCommand, handleEditUpsert } from './plugins/antiedit.js';
 import autostatus, { handleAutoStatusCommand } from './plugins/autostatus.js';
 import { parseCommand, getMessageText, isOwner, reply } from './lib/utils.js';
 import { loadSession } from './lib/session.js';
@@ -215,6 +215,9 @@ async function connectToWhatsApp() {
       // Store for anti-delete / anti-edit
       antidelete.storeMessage(msg);
       antiedit.storeMessage(msg);
+
+      // Baileys 7.x delivers edits as protocolMessage type 14 inside upsert
+      await handleEditUpsert(sock, msg);
 
       // Store view-once references
       storeViewOnce(msg);

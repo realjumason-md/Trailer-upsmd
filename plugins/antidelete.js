@@ -33,12 +33,16 @@ export async function handleDelete(sock, update) {
   if (!enabled) return;
 
   const { key, update: upd } = update;
-  if (!key || !upd?.messageStubType) return;
+  if (!key || !upd) return;
 
-  // messageStubType 1 = revoke
+  // Baileys 7.x revocation signals:
+  //   - DM delete:   upd.message === null  (server clears the message field)
+  //   - Group delete: upd.messageStubType === 1  (WAMessageStubType.REVOKE)
+  //   - Either:       upd.message.protocolMessage.type === 0  (REVOKE protocol msg)
   const isRevoke =
     upd.messageStubType === 1 ||
-    (upd.message?.protocolMessage?.type === 0);
+    upd.message === null ||
+    upd.message?.protocolMessage?.type === 0;
 
   if (!isRevoke) return;
 

@@ -27,11 +27,11 @@ const config = {
   // Where to forward deleted messages: 'owner' or 'same_chat'
   ANTI_DELETE_SEND_TO: process.env.ANTI_DELETE_SEND_TO || 'owner',
 
-  // ── AI — auto-enabled when AI_API_KEY is present ────────────────
+  // ── AI — auto-enabled when any AI API key is present ────────────
   // Set AI_ENABLED=false in .env to explicitly disable.
-  // When AI_API_KEY is set and AI_ENABLED is not 'false', AI is ON.
-  AI_ENABLED:       process.env.AI_ENABLED !== 'false' && !!(process.env.AI_API_KEY),
-  AI_API_KEY:       process.env.AI_API_KEY  || '',
+  // Supports AI_API_KEY or GROQ_API_KEY (both are accepted).
+  AI_ENABLED:       process.env.AI_ENABLED !== 'false' && !!(process.env.AI_API_KEY || process.env.GROQ_API_KEY),
+  AI_API_KEY:       process.env.AI_API_KEY || process.env.GROQ_API_KEY || '',
   AI_MODEL:         process.env.AI_MODEL    || 'llama3-8b-8192',
   AI_BASE_URL:      process.env.AI_BASE_URL || 'https://api.groq.com/openai/v1',
   AI_SYSTEM_PROMPT: process.env.AI_SYSTEM_PROMPT || 'You are a helpful WhatsApp assistant. Reply concisely.',

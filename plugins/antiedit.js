@@ -27,16 +27,8 @@ export function storeMessage(msg) {
   });
 }
 
-export async function handleEdit(sock, update) {
-  if (!enabled) return;
-
-  const { key, update: upd } = update;
-  if (!upd?.message?.editedMessage && !upd?.message?.protocolMessage?.editedMessage) return;
-
-  const id     = key.id;
-  const stored = store.get(id);
-  if (!stored) return;
-
+// ── Shared alert sender ────────────────────────────────────────────────────────
+async function sendEditAlert(sock, stored) {
   const { text, chat, sender } = stored;
 
   const caption =
@@ -57,6 +49,36 @@ export async function handleEdit(sock, update) {
   }
 }
 
+// ── Called from messages.update (older Baileys path) ──────────────────────────
+export async function handleEdit(sock, update) {
+  if (!enabled) return;
+
+  const { key, update: upd } = update;
+  if (!upd?.message?.editedMessage && !upd?.message?.protocolMessage?.editedMessage) return;
+
+  const stored = store.get(key.id);
+  if (!stored) return;
+  await sendEditAlert(sock, stored);
+}
+
+// ── Called from messages.upsert (Baileys 7.x primary edit path) ───────────────
+// In Baileys 7.x, edits arrive as a protocolMessage (type 14 = MESSAGE_EDIT)
+// inside messages.upsert, containing the original message key.
+export async function handleEditUpsert(sock, msg) {
+  if (!enabled) return;
+
+  const proto = msg.message?.protocolMessage;
+  // type 14 = MESSAGE_EDIT in the WhatsApp protocol
+  if (!proto || proto.type !== 14) return;
+
+  const originalId = proto.key?.id;
+  if (!originalId) return;
+
+  const stored = store.get(originalId);
+  if (!stored) return;
+  await sendEditAlert(sock, stored);
+}
+
 // ── Toggle command ─────────────────────────────────────────────────────────────
 export async function handleAntiEditCommand(sock, msg, parsed) {
   if (parsed?.command !== 'antiedit') return false;
@@ -75,4 +97,4 @@ export async function handleAntiEditCommand(sock, msg, parsed) {
   return true;
 }
 
-export default { storeMessage, handleEdit };
+export default { storeMessage, handleEdit, handleEditUpsert };
