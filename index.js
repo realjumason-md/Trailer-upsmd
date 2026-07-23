@@ -5,6 +5,12 @@
 
 require('dotenv').config();
 
+if (process.versions?.bun || typeof Bun !== 'undefined') {
+  console.error('[Runtime] Bun is not supported for this bot.');
+  console.error('[Runtime] Select Node.js 20+ in Wispbyte and start with: npm run start:optimized');
+  process.exit(1);
+}
+
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -47,12 +53,140 @@ if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
 let sock;
 let retryCount = 0;
 const MAX_RETRIES = 5;
+let socketGeneration = 0;
+let pairingPhone = null;
+let pairingPhonePromise = null;
+let pairingReadline = null;
+let pairingReadlineClosed = false;
+
+function normalizePairingPhone(value) {
+  let phone = String(value || '').replace(/\D/g, '');
+  if (phone.startsWith('00')) phone = phone.slice(2);
+
+  if (phone.length < 7 || phone.length > 15) {
+    throw new Error(
+      'Invalid phone number. Use the country code and digits only, for example 256706106326.'
+    );
+  }
+  if (phone.startsWith('0')) {
+    throw new Error(
+      'Include the country code and remove the local leading zero, for example 256706106326.'
+    );
+  }
+  return phone;
+}
+
+function closePairingReadline() {
+  if (pairingReadline && !pairingReadlineClosed) {
+    pairingReadlineClosed = true;
+    pairingReadline.close();
+  }
+  pairingReadline = null;
+}
+
+function getPairingPhone() {
+  if (pairingPhone) return Promise.resolve(pairingPhone);
+  if (pairingPhonePromise) return pairingPhonePromise;
+
+  pairingPhonePromise = (async () => {
+    if (config.PAIRING_PHONE) {
+      const phone = normalizePairingPhone(config.PAIRING_PHONE);
+      console.log(`[Pairing] Using configured phone number ending in ${phone.slice(-4)}.`);
+      pairingPhone = phone;
+      return phone;
+    }
+
+    if (!process.stdin || process.stdin.destroyed || process.stdin.readable === false) {
+      throw new Error(
+        'No usable console input is available. Set PAIRING_PHONE in the host environment and restart.'
+      );
+    }
+
+    console.log('\n╔══════════════════════════════════════════╗');
+    console.log('║  📱 WHATSAPP CONSOLE PAIRING             ║');
+    console.log('╠══════════════════════════════════════════╣');
+    console.log('║  Include country code; digits only       ║');
+    console.log('║  Example: 256706106326                   ║');
+    console.log('╚══════════════════════════════════════════╝');
+
+    pairingReadlineClosed = false;
+    pairingReadline = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+
+    const answer = await new Promise((resolve) => {
+      pairingReadline.question('WhatsApp number: ', resolve);
+    });
+    closePairingReadline();
+    const phone = normalizePairingPhone(answer);
+    pairingPhone = phone;
+    return phone;
+  })().finally(() => {
+    pairingPhonePromise = null;
+  });
+
+  return pairingPhonePromise;
+}
+
+function cancelConsolePairing(currentSock) {
+  if (currentSock?.__trailerPairingTimer) {
+    clearTimeout(currentSock.__trailerPairingTimer);
+    currentSock.__trailerPairingTimer = null;
+  }
+  if (currentSock?.__trailerPairingRetryTimer) {
+    clearTimeout(currentSock.__trailerPairingRetryTimer);
+    currentSock.__trailerPairingRetryTimer = null;
+  }
+  if (currentSock) {
+    currentSock.__trailerPairingScheduled = false;
+    currentSock.__trailerPairingStarted = false;
+  }
+}
+
+function scheduleConsolePairing(currentSock, generation) {
+  if (
+    config.PAIRING_METHOD === 'qr' ||
+    currentSock.__trailerPairingScheduled ||
+    currentSock.__trailerAuthState?.creds?.registered
+  ) return;
+  currentSock.__trailerPairingScheduled = true;
+
+  // Give the initial WebSocket handshake time to become usable. A fixed
+  // request immediately at process startup can return a code that WhatsApp
+  // rejects because the registration transport is not ready yet.
+  currentSock.__trailerPairingTimer = setTimeout(() => {
+    currentSock.__trailerPairingTimer = null;
+    if (generation !== socketGeneration || currentSock !== sock) return;
+    if (currentSock.__trailerConnection === 'close' || currentSock.__trailerConnection === 'open') return;
+    generateConsolePairingCode(currentSock, generation).catch((error) => {
+      console.error(`[Pairing] Fatal pairing attempt error: ${error.message}`);
+    });
+  }, 2500);
+}
+
+function clearStaleUnregisteredSession() {
+  const credsPath = path.join(SESSION_DIR, 'creds.json');
+  if (!fs.existsSync(credsPath)) return;
+
+  try {
+    const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+    if (creds.registered === false) {
+      fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+      fs.mkdirSync(SESSION_DIR, { recursive: true });
+      console.log('[Session] Removed an incomplete registration; starting fresh pairing.');
+    }
+  } catch (error) {
+    console.error(`[Session] Could not inspect saved credentials: ${error.message}`);
+  }
+}
 
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
   const { version } = await fetchLatestBaileysVersion();
+  const generation = ++socketGeneration;
 
-  sock = makeWASocket({
+  const currentSock = makeWASocket({
     version,
     logger,
     printQRInTerminal: config.PAIRING_METHOD === 'qr',
@@ -60,16 +194,26 @@ async function connectToWhatsApp() {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger),
     },
-    browser: Browsers.macOS('Safari'),
-    markOnlineOnConnect: false,
+    // Match MEGA-MD's accepted desktop identity. Chrome is more reliable
+    // than the previous Safari identity for phone-number registration.
+    browser: Browsers.macOS('Chrome'),
+    markOnlineOnConnect: true,
     generateHighQualityLinkPreview: true,
     syncFullHistory: false,
+    connectTimeoutMs: 60000,
+    defaultQueryTimeoutMs: 60000,
+    keepAliveIntervalMs: 10000,
   });
 
-  setBotSocket(sock);
+  sock = currentSock;
+  currentSock.__trailerAuthState = state;
+  setBotSocket(currentSock);
 
   // ── CONNECTION UPDATES ────────────────────────────────────────
-  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+  currentSock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+    if (generation !== socketGeneration || currentSock !== sock) return;
+    currentSock.__trailerConnection = connection || currentSock.__trailerConnection;
+
     if (qr && config.PAIRING_METHOD === 'qr') {
       try {
         const qrcode = require('qrcode-terminal');
@@ -78,8 +222,16 @@ async function connectToWhatsApp() {
       } catch {}
     }
 
+    // Pair only after Baileys has started the current socket. This replaces
+    // the old blind startup timer and avoids stale codes from a closing socket.
+    if (connection === 'connecting' && !state.creds.registered) {
+      scheduleConsolePairing(currentSock, generation);
+    }
+
     if (connection === 'open') {
       retryCount = 0;
+      cancelConsolePairing(currentSock);
+      closePairingReadline();
       setConnected(true);
       console.log(`\n✅ Connected as: ${sock.user?.name} (+${sock.user?.id?.split(':')[0]})`);
       console.log(`🤖 Bot: ${config.BOT_NAME} is online!\n`);
@@ -89,6 +241,7 @@ async function connectToWhatsApp() {
     }
 
     if (connection === 'close') {
+      cancelConsolePairing(currentSock);
       setConnected(false);
       const reason = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = reason !== DisconnectReason.loggedOut;
@@ -114,13 +267,19 @@ async function connectToWhatsApp() {
   });
 
   // ── CREDENTIALS SAVE ─────────────────────────────────────────
-  sock.ev.on('creds.update', saveCreds);
+  currentSock.ev.on('creds.update', saveCreds);
 
   // ── CONSOLE PAIRING ───────────────────────────────────────────
   // Wispbyte's console sends stdin to the Node process. Ask for the number
   // there and print the pairing code back into that same console.
   if (!state.creds.registered && config.PAIRING_METHOD !== 'qr') {
-    setTimeout(() => generateConsolePairingCode(sock), 3000);
+    // Some Baileys versions emit no separate connecting event. Keep a guarded
+    // fallback, but never run it against a replaced socket.
+    setTimeout(() => {
+      if (generation === socketGeneration && currentSock === sock) {
+        scheduleConsolePairing(currentSock, generation);
+      }
+    }, 5000);
   }
 
   // ── MESSAGES: UPSERT ─────────────────────────────────────────
@@ -266,48 +425,60 @@ async function connectToWhatsApp() {
   return sock;
 }
 
-async function generateConsolePairingCode(socket) {
+async function generateConsolePairingCode(socket, generation, attempt = 1) {
+  if (generation !== socketGeneration || socket !== sock) return;
+  if (socket.__trailerPairingStarted || socket.__trailerAuthState?.creds?.registered) return;
+  if (socket.__trailerConnection === 'close' || socket.__trailerConnection === 'open') return;
+  socket.__trailerPairingStarted = true;
+
   try {
-    let phone = (config.PAIRING_PHONE || '').replace(/\D/g, '');
-
-    if (!phone) {
-      console.log('\n╔══════════════════════════════════════════╗');
-      console.log('║  📱 WHATSAPP CONSOLE PAIRING             ║');
-      console.log('╠══════════════════════════════════════════╣');
-      console.log('║  Enter your number below                  ║');
-      console.log('║  Country code included, no + or spaces   ║');
-      console.log('╚══════════════════════════════════════════╝');
-
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-      });
-
-      phone = (await new Promise((resolve) => {
-        rl.question('WhatsApp number: ', resolve);
-      })).replace(/\D/g, '');
-      rl.close();
-    }
-
-    if (phone.length < 7 || phone.length > 15) {
-      throw new Error('Invalid phone number. Use country code with digits only, for example 256706106326.');
-    }
+    const phone = await getPairingPhone();
+    if (generation !== socketGeneration || socket !== sock) return;
+    if (socket.__trailerConnection === 'close' || socket.__trailerConnection === 'open') return;
 
     const code = await socket.requestPairingCode(phone);
-    const formatted = code?.match(/.{1,4}/g)?.join('-') || code;
+    if (!code) throw new Error('WhatsApp returned an empty pairing code.');
+    if (
+      generation !== socketGeneration ||
+      socket !== sock ||
+      socket.__trailerConnection === 'close' ||
+      socket.__trailerConnection === 'open' ||
+      socket.__trailerAuthState?.creds?.registered
+    ) {
+      return;
+    }
+
+    const formatted = code.match(/.{1,4}/g)?.join('-') || code;
+    closePairingReadline();
 
     console.log('\n╔══════════════════════════════════════════╗');
     console.log('║  ✅ WHATSAPP PAIRING CODE                ║');
     console.log('╠══════════════════════════════════════════╣');
     console.log(`║  ${String(formatted).padEnd(40)}║`);
     console.log('╠══════════════════════════════════════════╣');
-    console.log('║  WhatsApp → Linked Devices               ║');
-    console.log('║  → Link a device → phone number         ║');
-    console.log('║  Enter the code above                    ║');
+    console.log('║  Enter it immediately on your phone:    ║');
+    console.log('║  WhatsApp → Linked Devices → Link device ║');
+    console.log('║  → Link with phone number instead        ║');
     console.log('╚══════════════════════════════════════════╝\n');
   } catch (error) {
-    console.error(`[Pairing] Could not generate code: ${error.message}`);
-    console.error('[Pairing] Restart the bot and try again, or set PAIRING_PHONE in the host environment.');
+    socket.__trailerPairingStarted = false;
+    const message = error?.message || String(error);
+    console.error(`[Pairing] Attempt ${attempt}/3 failed: ${message}`);
+
+    if (generation !== socketGeneration || socket !== sock) return;
+    if (attempt < 3 && !socket.__trailerAuthState?.creds?.registered) {
+      const retryDelay = attempt * 3000;
+      console.log(`[Pairing] Retrying this active socket in ${retryDelay / 1000}s...`);
+      socket.__trailerPairingRetryTimer = setTimeout(() => {
+        socket.__trailerPairingRetryTimer = null;
+        if (generation === socketGeneration && socket === sock) {
+          generateConsolePairingCode(socket, generation, attempt + 1);
+        }
+      }, retryDelay);
+    } else {
+      console.error('[Pairing] No usable code was returned after three attempts.');
+      console.error('[Pairing] Check that Wispbyte is using Node.js 20+ and restart only after reviewing this error.');
+    }
   }
 }
 
@@ -352,6 +523,7 @@ async function main() {
   console.log('║  Starting up...                  ║');
   console.log('╚══════════════════════════════════╝\n');
 
+  clearStaleUnregisteredSession();
   startServer();
   await connectToWhatsApp();
 }

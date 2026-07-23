@@ -1,6 +1,6 @@
 /**
  * EXPRESS SERVER
- * - Pairing web UI: enter phone number → get pairing code
+ * - Status page; pairing is handled in the hosting console
  * - Keep-alive ping endpoint
  * - Status endpoint
  */
@@ -13,11 +13,9 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 let botSock         = null;
-let pairingCodeCache = null;
 let isConnected      = false;
 
 function setBotSocket(sock) { botSock = sock; }
-function setPairingCode(code) { pairingCodeCache = code; }
 function setConnected(val)    { isConnected = val; }
 
 /* ── HTML shell ─────────────────────────────────────────────────────────── */
@@ -26,7 +24,7 @@ const html = (body) => `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>${config.BOT_NAME} — Pairing</title>
+  <title>${config.BOT_NAME} — Status</title>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     body{
@@ -111,19 +109,8 @@ const html = (body) => `<!DOCTYPE html>
 </body>
 </html>`;
 
-/* ── Root — pairing form ────────────────────────────────────────────────── */
+/* ── Root — status only; console handles pairing ────────────────────────── */
 app.get('/', (req, res) => {
-  return res.send(html(`
-    <div class="logo">🤖</div>
-    <h1>${config.BOT_NAME}</h1>
-    <div class="sub">WhatsApp Bot</div>
-    <div class="status-row">Status <span class="badge ${isConnected ? 'online' : 'offline'}">● ${isConnected ? 'Connected' : 'Waiting for console pairing'}</span></div>
-    <div class="steps">
-      Pairing is handled in the server console.<br><br>
-      Enter your WhatsApp number in the Wispbyte console. The pairing code will be printed there.
-    </div>
-  `));
-
   if (isConnected) {
     return res.send(html(`
       <div class="logo">🤖</div>
@@ -137,119 +124,28 @@ app.get('/', (req, res) => {
     `));
   }
 
-  if (pairingCodeCache) {
-    return res.send(html(`
-      <div class="logo">📱</div>
-      <h1>${config.BOT_NAME}</h1>
-      <div class="sub">Enter this code in WhatsApp to link</div>
-      <div class="code-wrap">
-        <div class="code-label">Pairing Code — tap to copy</div>
-        <div class="code" title="Tap to copy">${pairingCodeCache}</div>
-      </div>
-      <div class="steps">
-        <span>1.</span> Open WhatsApp on your phone<br>
-        <span>2.</span> Tap <span>⋮ Menu → Linked Devices</span><br>
-        <span>3.</span> Tap <span>Link a Device</span><br>
-        <span>4.</span> Tap <span>Link with phone number instead</span><br>
-        <span>5.</span> Enter the code above
-      </div>
-    `));
-  }
-
-  // Default: show form
   res.send(html(`
     <div class="logo">🤖</div>
     <h1>${config.BOT_NAME}</h1>
-    <div class="sub">Enter your WhatsApp number to link</div>
-    <form method="POST" action="/pair" id="form">
-      <label for="phone">WhatsApp Number</label>
-      <input
-        type="tel" id="phone" name="phone"
-        placeholder="256706106326"
-        value="${config.PAIRING_PHONE || ''}"
-        required autofocus
-        pattern="[0-9]{7,15}"
-      />
-      <div class="hint">Include country code, no + or spaces (e.g. 256706106326)</div>
-      <button type="submit" id="btn">Get Pairing Code</button>
-    </form>
-    <script>
-      document.getElementById('form').addEventListener('submit', function() {
-        var btn = document.getElementById('btn');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span>Generating…';
-      });
-    </script>
+    <div class="sub">WhatsApp Bot</div>
+    <div class="status-row">Status <span class="badge offline">● Waiting for console pairing</span></div>
+    <div class="steps">
+      Pairing is handled in the server console.<br><br>
+      Enter your WhatsApp number in the hosting console. The pairing code will be printed there.
+    </div>
   `));
 });
 
-/* ── POST /pair — request pairing code ─────────────────────────────────── */
+/* ── Pairing routes intentionally disabled ──────────────────────────────── */
 app.post('/pair', async (req, res) => {
-  return res.status(410).send('Pairing is console-only. Enter your number in the server console.');
-
-  const raw   = (req.body.phone || '').toString().replace(/[^0-9]/g, '');
-  if (!raw || raw.length < 7) {
-    return res.send(html(`
-      <div class="logo">⚠️</div>
-      <h1>${config.BOT_NAME}</h1>
-      <div class="err">Invalid number. Please include the country code (e.g. 256706106326).</div>
-      <div style="text-align:center;margin-top:20px">
-        <a href="/" style="color:#25d366;text-decoration:none;font-weight:600">← Try again</a>
-      </div>
-    `));
-  }
-
-  if (isConnected) {
-    return res.send(html(`
-      <div class="logo">✅</div>
-      <h1>${config.BOT_NAME}</h1>
-      <div class="sub">Already connected — no pairing needed.</div>
-      <div class="status-row"><span class="badge online">● Online</span></div>
-    `));
-  }
-
-  try {
-    if (!botSock) throw new Error('Bot socket not ready yet. Please wait a few seconds and try again.');
-
-    const code = await botSock.requestPairingCode(raw);
-    const fmt  = code?.match(/.{1,4}/g)?.join('-') || code;
-    setPairingCode(fmt);
-
-    return res.send(html(`
-      <div class="logo">📱</div>
-      <h1>${config.BOT_NAME}</h1>
-      <div class="sub">Enter this code in WhatsApp to link</div>
-      <div class="code-wrap">
-        <div class="code-label">Pairing Code — tap to copy</div>
-        <div class="code" title="Tap to copy">${fmt}</div>
-      </div>
-      <div class="steps">
-        <span>1.</span> Open WhatsApp on your phone<br>
-        <span>2.</span> Tap <span>⋮ Menu → Linked Devices</span><br>
-        <span>3.</span> Tap <span>Link a Device</span><br>
-        <span>4.</span> Tap <span>Link with phone number instead</span><br>
-        <span>5.</span> Enter the code above
-      </div>
-    `));
-  } catch (err) {
-    return res.send(html(`
-      <div class="logo">❌</div>
-      <h1>${config.BOT_NAME}</h1>
-      <div class="err">${err.message}</div>
-      <div style="text-align:center;margin-top:20px">
-        <a href="/" style="color:#25d366;text-decoration:none;font-weight:600">← Try again</a>
-      </div>
-    `));
-  }
+  res.status(410).send('Pairing is console-only. Enter your number in the server console.');
 });
 
-/* ── GET /pair (JSON) — for programmatic access ─────────────────────────── */
 app.get('/pair', (req, res) => {
-  return res.status(410).json({ success: false, message: 'Pairing is console-only. Enter your number in the server console.' });
-
-  if (pairingCodeCache) return res.json({ success: true, code: pairingCodeCache });
-  if (isConnected)      return res.json({ success: true, connected: true, message: 'Already linked.' });
-  res.json({ success: false, message: 'No pairing code yet. POST your phone number to /pair.' });
+  res.status(410).json({
+    success: false,
+    message: 'Pairing is console-only. Enter your number in the server console.',
+  });
 });
 
 /* ── Health / keep-alive ─────────────────────────────────────────────────── */
@@ -281,9 +177,9 @@ function startServer() {
   const port = config.PORT || 3000;
   app.listen(port, '0.0.0.0', () => {
     console.log(`[Server] Running → http://localhost:${port}`);
-    console.log(`[Server] Open the URL above to link your WhatsApp`);
+    console.log('[Server] Pairing is handled in this console; the URL is for health/status only.');
   });
   return app;
 }
 
-module.exports = { startServer, setBotSocket, setPairingCode, setConnected, app };
+module.exports = { startServer, setBotSocket, setConnected, app };

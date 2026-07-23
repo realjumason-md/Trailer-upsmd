@@ -118,6 +118,25 @@ Use Node.js 20, install dependencies with `npm install`, run
 `npm run start:optimized`, enter your number in the console, and keep
 `auth_info_baileys/` in persistent storage.
 
+### Wispbyte
+
+Wispbyte may default to Bun, but this bot must run with Node.js because the
+WhatsApp WebSocket registration flow is not fully supported by Bun.
+
+1. Select **Node.js 20** as the server runtime.
+2. Set the startup command to:
+
+   ```bash
+   bash start.sh
+   ```
+
+3. Expose port `5000`.
+4. Restart the server and enter your number only when the console shows
+   `WhatsApp number:`.
+5. Enter the pairing code immediately in WhatsApp.
+
+If the console shows `[Bun] Warning`, the wrong runtime is still selected.
+
 ### Why Vercel is not included
 
 Vercel functions are short-lived and do not provide a persistent local session

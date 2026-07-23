@@ -7,6 +7,7 @@ Node.js process with persistent storage for `auth_info_baileys/`.
 
 - Start command: `npm run start:optimized`
 - Node.js: 20 or newer
+- Wispbyte start command: `bash start.sh` (forces Node.js instead of Bun)
 - Health endpoint: `/health`
 - Required value: `OWNER_NUMBER`
 - Pairing: enter the WhatsApp number in the server console, or set
@@ -61,6 +62,19 @@ Enter the full number with country code and digits only, for example:
 The pairing code is then printed in the same console. In WhatsApp, open
 **Linked Devices → Link a device → Link with phone number instead** and enter
 that code.
+
+## Wispbyte runtime requirement
+
+Wispbyte can start JavaScript projects with Bun by default. Do not use Bun for
+this bot. Select Node.js 20 and start with:
+
+```bash
+bash start.sh
+```
+
+The bot exits with a clear error if it detects Bun. The `[Bun] Warning:
+ws.WebSocket ... event is not implemented` message means the runtime is still
+incorrect and pairing will not work reliably.
 
 ## Why Vercel is not supported
 
