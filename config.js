@@ -18,7 +18,7 @@ const config = {
   //   When blank the bot prompts in the hosting console.
   PAIRING_NUMBER: process.env.PAIRING_NUMBER || '',
 
-  // ── Features ────────────────────────────────────────────────────
+  // ── Features (default ON; set to 'false' in .env to disable) ───
   AUTO_STATUS_VIEW: process.env.AUTO_STATUS_VIEW !== 'false',
   AUTO_BIO:         process.env.AUTO_BIO         !== 'false',
   ANTI_DELETE:      process.env.ANTI_DELETE       !== 'false',
@@ -27,8 +27,10 @@ const config = {
   // Where to forward deleted messages: 'owner' or 'same_chat'
   ANTI_DELETE_SEND_TO: process.env.ANTI_DELETE_SEND_TO || 'owner',
 
-  // ── AI — Groq free tier by default ──────────────────────────────
-  AI_ENABLED:       process.env.AI_ENABLED === 'true',
+  // ── AI — auto-enabled when AI_API_KEY is present ────────────────
+  // Set AI_ENABLED=false in .env to explicitly disable.
+  // When AI_API_KEY is set and AI_ENABLED is not 'false', AI is ON.
+  AI_ENABLED:       process.env.AI_ENABLED !== 'false' && !!(process.env.AI_API_KEY),
   AI_API_KEY:       process.env.AI_API_KEY  || '',
   AI_MODEL:         process.env.AI_MODEL    || 'llama3-8b-8192',
   AI_BASE_URL:      process.env.AI_BASE_URL || 'https://api.groq.com/openai/v1',
