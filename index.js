@@ -32,6 +32,7 @@ const { handleShazam } = require('./plugins/shazam');
 const { handleUpdate } = require('./plugins/update');
 const { handleAICommand, handleAIReply } = require('./plugins/ai');
 const { storeViewOnce, handleVV } = require('./plugins/antiviewonce');
+const { handleGetDp } = require('./plugins/getdp');
 
 const { parseCommand, getMessageText, isOwner, reply } = require('./lib/utils');
 
@@ -208,6 +209,12 @@ async function connectToWhatsApp() {
           // View-once reveal
           case 'vv':
             await handleVV(sock, msg, ctx);
+            break;
+
+          // Get profile picture
+          case 'getdp':
+          case 'getpp':
+            await handleGetDp(sock, msg, ctx);
             break;
 
           // Help
