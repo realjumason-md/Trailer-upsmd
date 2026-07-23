@@ -1,12 +1,16 @@
 /**
  * ANTI-EDIT — captures original message before it is edited
+ * Toggle: .antiedit on | .antiedit off
  */
 
 import config from '../config.js';
-import { getMessageText, jidToNumber } from '../lib/utils.js';
+import { isOwner, reply, getMessageText, jidToNumber } from '../lib/utils.js';
 
 const store = new Map(); // id → { text, chat, sender, timestamp }
 const MAX   = 2000;
+
+// Runtime toggle (starts from env config)
+let enabled = config.ANTI_EDIT;
 
 export function storeMessage(msg) {
   if (!msg.message || !msg.key.id) return;
@@ -24,7 +28,7 @@ export function storeMessage(msg) {
 }
 
 export async function handleEdit(sock, update) {
-  if (!config.ANTI_EDIT) return;
+  if (!enabled) return;
 
   const { key, update: upd } = update;
   if (!upd?.message?.editedMessage && !upd?.message?.protocolMessage?.editedMessage) return;
@@ -51,6 +55,24 @@ export async function handleEdit(sock, update) {
   } catch (err) {
     console.error('[anti-edit]', err.message);
   }
+}
+
+// ── Toggle command ─────────────────────────────────────────────────────────────
+export async function handleAntiEditCommand(sock, msg, parsed) {
+  if (parsed?.command !== 'antiedit') return false;
+  if (!isOwner(msg)) { await reply(sock, msg, '🔒 Owner only.'); return true; }
+
+  const arg = parsed.args[0]?.toLowerCase();
+  if (arg === 'on') {
+    enabled = true;
+    await reply(sock, msg, '✏️ *Anti-Edit ON* — original messages will be forwarded when edited.');
+  } else if (arg === 'off') {
+    enabled = false;
+    await reply(sock, msg, '🔕 *Anti-Edit OFF.*');
+  } else {
+    await reply(sock, msg, `✏️ Anti-Edit is currently *${enabled ? 'ON' : 'OFF'}*.\nUse *.antiedit on* or *.antiedit off*`);
+  }
+  return true;
 }
 
 export default { storeMessage, handleEdit };
