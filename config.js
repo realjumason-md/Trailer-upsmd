@@ -7,15 +7,10 @@ const config = {
   PREFIX:      process.env.PREFIX      || '.',
 
   // ── Session ─────────────────────────────────────────────────────
-  // SESSION_ID: base64-encoded creds.json from a paired session.
-  //   Leave blank to do fresh pairing via code or QR.
   SESSION_ID:  process.env.SESSION_ID  || '',
   SESSION_DIR: process.env.SESSION_DIR || './session',
 
   // ── Pairing ─────────────────────────────────────────────────────
-  // PAIRING_NUMBER: phone with country code, no + or spaces.
-  //   When set the bot uses it automatically (no prompt needed).
-  //   When blank the bot prompts in the hosting console.
   PAIRING_NUMBER: process.env.PAIRING_NUMBER || '',
 
   // ── Features (default ON; set to 'false' in .env to disable) ───
@@ -24,12 +19,9 @@ const config = {
   ANTI_DELETE:      process.env.ANTI_DELETE       !== 'false',
   ANTI_EDIT:        process.env.ANTI_EDIT         !== 'false',
   ANTI_VIEW_ONCE:   process.env.ANTI_VIEW_ONCE    !== 'false',
-  // Where to forward deleted messages: 'owner' or 'same_chat'
   ANTI_DELETE_SEND_TO: process.env.ANTI_DELETE_SEND_TO || 'owner',
 
-  // ── AI — auto-enabled when any AI API key is present ────────────
-  // Set AI_ENABLED=false in .env to explicitly disable.
-  // Supports AI_API_KEY or GROQ_API_KEY (both are accepted).
+  // ── AI ───────────────────────────────────────────────────────────
   AI_ENABLED:       process.env.AI_ENABLED !== 'false' && !!(process.env.AI_API_KEY || process.env.GROQ_API_KEY),
   AI_API_KEY:       process.env.AI_API_KEY || process.env.GROQ_API_KEY || '',
   AI_MODEL:         process.env.AI_MODEL    || 'llama3-8b-8192',
@@ -41,7 +33,6 @@ const config = {
   GITHUB_BRANCH: process.env.GITHUB_BRANCH || 'main',
 
   // ── Shazam (RapidAPI) ────────────────────────────────────────────
-  // Free tier at https://rapidapi.com/search/shazam (shazam-api6 plan)
   RAPIDAPI_KEY: process.env.RAPIDAPI_KEY || '',
 
   // ── TikTok ──────────────────────────────────────────────────────
@@ -49,6 +40,15 @@ const config = {
 
   // ── Server ──────────────────────────────────────────────────────
   PORT: Number(process.env.PORT) || 5000,
+
+  // ── Keep-alive (for free-tier hosting like Render / Railway) ───
+  // Set KEEP_ALIVE_URL to the public URL of this bot's web server so it
+  // pings itself periodically and prevents the free tier from sleeping.
+  // Example: https://your-app.onrender.com
+  KEEP_ALIVE_URL:      process.env.KEEP_ALIVE_URL      || '',
+  // How often to self-ping, in milliseconds. Default: every 14 minutes
+  // (Render free tier sleeps after 15 min of inactivity).
+  KEEP_ALIVE_INTERVAL: Number(process.env.KEEP_ALIVE_INTERVAL) || 14 * 60 * 1000,
 };
 
 export default config;

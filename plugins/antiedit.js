@@ -1,12 +1,19 @@
 /**
- * ANTI-EDIT — captures original message before it is edited
+ * ANTI-EDIT — captures original message before it is edited, then sends the
+ * original content when an edit is detected.
+ *
+ * Key fix: storeMessage() refuses to overwrite an existing entry.
+ * This matters because in Baileys 7.x edits can arrive in messages.upsert
+ * with the same key.id as the original — if we overwrote, we'd lose the
+ * original content before we could send the alert.
+ *
  * Toggle: .antiedit on | .antiedit off
  */
 
 import config from '../config.js';
 import { isOwner, reply, getMessageText, jidToNumber } from '../lib/utils.js';
 
-const store = new Map(); // id → { text, chat, sender, timestamp }
+const store = new Map(); // originalMsgId → { text, chat, sender, timestamp }
 const MAX   = 2000;
 
 // Runtime toggle (starts from env config)
@@ -14,6 +21,16 @@ let enabled = config.ANTI_EDIT;
 
 export function storeMessage(msg) {
   if (!msg.message || !msg.key.id) return;
+
+  // Skip protocol messages (edits, deletes, receipts) — they are not user content
+  const firstKey = Object.keys(msg.message)[0];
+  if (firstKey === 'protocolMessage' || firstKey === 'messageContextInfo') return;
+
+  // IMPORTANT: never overwrite an existing entry.
+  // If the same key.id arrives again (e.g. Baileys resending an edited message
+  // with the original ID), we must keep the original content.
+  if (store.has(msg.key.id)) return;
+
   const text = getMessageText(msg);
   if (!text) return;
 
@@ -28,22 +45,29 @@ export function storeMessage(msg) {
 }
 
 // ── Shared alert sender ────────────────────────────────────────────────────────
-async function sendEditAlert(sock, stored) {
-  const { text, chat, sender } = stored;
+async function sendEditAlert(sock, stored, editedText) {
+  const { text: originalText, chat, sender } = stored;
 
-  const caption =
+  let caption =
     `✏️ *Anti-Edit Alert*\n` +
-    `👤 Edited by: ${jidToNumber(sender)}\n` +
+    `👤 Edited by: @${jidToNumber(sender)}\n` +
     `💬 Chat: ${jidToNumber(chat)}\n` +
     `📅 Time: ${new Date(stored.timestamp).toLocaleString()}\n\n` +
-    `📝 *Original message:*\n${text}`;
+    `📝 *Original message:*\n${originalText}`;
+
+  if (editedText && editedText !== originalText) {
+    caption += `\n\n✏️ *Edited to:*\n${editedText}`;
+  }
 
   const dest = config.ANTI_DELETE_SEND_TO === 'same_chat'
     ? chat
     : `${config.OWNER_NUMBER}@s.whatsapp.net`;
 
   try {
-    await sock.sendMessage(dest, { text: caption });
+    await sock.sendMessage(dest, {
+      text: caption,
+      mentions: [sender],
+    });
   } catch (err) {
     console.error('[anti-edit]', err.message);
   }
@@ -54,11 +78,22 @@ export async function handleEdit(sock, update) {
   if (!enabled) return;
 
   const { key, update: upd } = update;
-  if (!upd?.message?.editedMessage && !upd?.message?.protocolMessage?.editedMessage) return;
+
+  // Baileys may surface edits as editedMessage inside the update payload
+  const editedMsg  = upd?.message?.editedMessage;
+  const protoEdited = upd?.message?.protocolMessage?.editedMessage;
+  if (!editedMsg && !protoEdited) return;
 
   const stored = store.get(key.id);
   if (!stored) return;
-  await sendEditAlert(sock, stored);
+
+  // Try to extract the new text from the edit payload
+  const newText =
+    editedMsg?.message?.conversation ||
+    editedMsg?.message?.extendedTextMessage?.text ||
+    '';
+
+  await sendEditAlert(sock, stored, newText);
 }
 
 // ── Called from messages.upsert (Baileys 7.x primary edit path) ───────────────
@@ -76,7 +111,15 @@ export async function handleEditUpsert(sock, msg) {
 
   const stored = store.get(originalId);
   if (!stored) return;
-  await sendEditAlert(sock, stored);
+
+  // Extract the new (edited) text from the protocolMessage payload
+  const editedMsg = proto.editedMessage;
+  const newText =
+    editedMsg?.conversation ||
+    editedMsg?.extendedTextMessage?.text ||
+    '';
+
+  await sendEditAlert(sock, stored, newText);
 }
 
 // ── Toggle command ─────────────────────────────────────────────────────────────

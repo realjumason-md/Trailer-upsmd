@@ -243,7 +243,44 @@ async function connectToWhatsApp() {
           return;
         }
         if (command === 'ping') {
-          await reply(sock, msg, '🏓 Pong! Bot is alive.');
+          const start   = Date.now();
+          const sentMsg = await reply(sock, msg, '🏓 Pinging...');
+          const latency = Date.now() - start;
+          const upSec   = Math.floor(process.uptime());
+          const d = Math.floor(upSec / 86400), h = Math.floor((upSec % 86400) / 3600),
+                m = Math.floor((upSec % 3600) / 60), s = upSec % 60;
+          const parts = []; if (d) parts.push(`${d}d`); if (h) parts.push(`${h}h`);
+          if (m) parts.push(`${m}m`); parts.push(`${s}s`);
+          const ram = (process.memoryUsage().rss / 1024 / 1024).toFixed(1);
+          await sock.sendMessage(msg.key.remoteJid, {
+            text: `🏓 *Pong!*\n⚡ Latency: ${latency}ms\n⏱ Uptime: ${parts.join(' ')}\n💾 RAM: ${ram} MB\n🤖 ${config.BOT_NAME} is online`,
+            edit: sentMsg?.key,
+          });
+          return;
+        }
+        if (command === 'alive') {
+          const os     = await import('os');
+          const upSec  = Math.floor(process.uptime());
+          const d = Math.floor(upSec / 86400), h = Math.floor((upSec % 86400) / 3600),
+                m = Math.floor((upSec % 3600) / 60), s = upSec % 60;
+          const parts = []; if (d) parts.push(`${d}d`); if (h) parts.push(`${h}h`);
+          if (m) parts.push(`${m}m`); parts.push(`${s}s`);
+          const mem      = process.memoryUsage();
+          const totalMem = (os.default.totalmem() / 1024 / 1024).toFixed(0);
+          const usedMem  = (mem.rss / 1024 / 1024).toFixed(1);
+          const heapUsed = (mem.heapUsed / 1024 / 1024).toFixed(1);
+          const cpuLoad  = os.default.loadavg()[0].toFixed(2);
+          const platform = os.default.platform();
+          const arch     = os.default.arch();
+          const text =
+            `🤖 *${config.BOT_NAME} IS ALIVE!*\n\n` +
+            `⏱ Uptime: ${parts.join(' ')}\n` +
+            `💾 RAM: ${usedMem} MB used / ${totalMem} MB total\n` +
+            `🗂 Heap: ${heapUsed} MB\n` +
+            `📊 CPU Load: ${cpuLoad}\n` +
+            `🖥 Platform: ${platform} (${arch})\n` +
+            `🟢 Node.js: ${process.version}`;
+          await reply(sock, msg, text);
           return;
         }
         if (command === 'status') {
@@ -364,32 +401,24 @@ async function sendStatus(sock, msg) {
 }
 
 // ─── Help menu ────────────────────────────────────────────────────────────────
+
 async function sendHelp(sock, msg) {
   const p = config.PREFIX;
   const text =
     `╔══════════════════════════╗\n` +
     `║  🤖 ${config.BOT_NAME.padEnd(20)} ║\n` +
     `╚══════════════════════════╝\n\n` +
-    `*📥 DOWNLOADER*\n` +
-    `▸ ${p}tiktok <url> — TikTok video\n` +
-    `▸ ${p}tiktokaudio <url> — TikTok audio\n` +
-    `▸ ${p}shazam — Identify song (reply to audio)\n\n` +
-    `*🛡️ PROTECTION (owner toggles)*\n` +
-    `▸ ${p}antidelete on/off — Anti-delete alert\n` +
-    `▸ ${p}antiedit on/off — Anti-edit alert\n` +
-    `▸ ${p}antiviewonce on/off — Save view-once media\n` +
-    `▸ ${p}vv — Reveal saved view-once media\n` +
-    `▸ ${p}autostatus on/off — Auto-view statuses\n\n` +
     `*🤖 AI (free — no key needed)*\n` +
     `▸ ${p}ai <question> — Ask AI anything\n` +
     `▸ ${p}ask / ${p}gpt — Aliases for .ai\n` +
     `▸ ${p}aionall — AI auto-reply ON for all DMs 🔒\n` +
     `▸ ${p}aialloff — AI auto-reply OFF globally 🔒\n` +
-    `▸ ${p}aion / ${p}aioff — Toggle for this chat 🔒\n` +
-    `▸ ${p}aistatus — Show AI backend & status 🔒\n\n` +
-    `*🛡️ PROTECTION (owner toggles 🔒)*\n` +
+    `▸ ${p}aion — Enable AI in this chat (overrides global) 🔒\n` +
+    `▸ ${p}aioff — Disable AI in this chat (overrides global) 🔒\n` +
+    `▸ ${p}aistatus — AI status & per-chat overrides 🔒\n\n` +
+    `*🛡️ PROTECTION (owner 🔒)*\n` +
     `▸ ${p}antidelete on/off — Forward deleted messages\n` +
-    `▸ ${p}antiedit on/off — Alert on edited messages\n` +
+    `▸ ${p}antiedit on/off — Alert on edits (original shown)\n` +
     `▸ ${p}antiviewonce on/off — Save view-once media\n` +
     `▸ ${p}vv — Reveal saved view-once (or reply to one)\n` +
     `▸ ${p}autostatus on/off — Auto-view statuses\n` +
@@ -404,12 +433,13 @@ async function sendHelp(sock, msg) {
     `*📥 DOWNLOADER*\n` +
     `▸ ${p}tiktok <url> — TikTok HD no-watermark video\n` +
     `▸ ${p}tiktokaudio <url> — TikTok audio\n` +
-    `▸ ${p}shazam — Identify song (reply to audio or send audio)\n\n` +
+    `▸ ${p}shazam — Identify song (reply to audio)\n\n` +
     `*⚙️ SYSTEM (owner 🔒)*\n` +
+    `▸ ${p}alive — Bot status, uptime & system info\n` +
+    `▸ ${p}ping — Response latency & keep-alive check\n` +
     `▸ ${p}status — Show all plugin on/off status\n` +
     `▸ ${p}update — Pull latest updates from GitHub\n` +
-    `▸ ${p}restart — Restart bot (session preserved)\n` +
-    `▸ ${p}ping — Check if bot is alive`;
+    `▸ ${p}restart — Restart bot (session preserved)`;
 
   await reply(sock, msg, text);
 }
@@ -428,6 +458,16 @@ async function main() {
   }
 
   startServer();
+
+  // Memory watchdog — restart if RSS > 400 MB (MEGA-MD approach for free hosting)
+  setInterval(() => {
+    const rss = process.memoryUsage().rss / 1024 / 1024;
+    if (rss > 400) {
+      printLog('warning', `RAM too high (${rss.toFixed(0)} MB > 400 MB) — restarting...`);
+      process.exit(1);
+    }
+  }, 30_000);
+
   await connectToWhatsApp();
 }
 

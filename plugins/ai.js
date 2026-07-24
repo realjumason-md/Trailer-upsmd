@@ -5,6 +5,17 @@
  * Works WITHOUT any API key using three free GlobalTechInfo worker APIs.
  * If AI_API_KEY / GROQ_API_KEY is set, Groq/OpenAI is tried first, then
  * falls back to the free workers automatically.
+ *
+ * Toggle hierarchy (highest priority first):
+ *   1. chatAiOff  — explicit per-chat OFF  (beats global ON)
+ *   2. chatAiOn   — explicit per-chat ON   (beats global OFF)
+ *   3. globalAiOn — global default (applies to DMs only)
+ *
+ * Commands:
+ *   aionall  → globalAiOn=true,  clear chatAiOff (individual on-overrides kept)
+ *   aialloff → globalAiOn=false, clear chatAiOn  (individual off-exclusions kept)
+ *   aion     → add to chatAiOn,  remove from chatAiOff  (beats any global state)
+ *   aioff    → add to chatAiOff, remove from chatAiOn   (beats any global state)
  */
 
 import axios from 'axios';
@@ -34,10 +45,9 @@ async function askFreeAI(query) {
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
-// AI is ON by default — works without any key via free APIs
-let globalAiOn = true;
-const chatAiOn  = new Set();
-const chatAiOff = new Set();
+let globalAiOn = true;   // default: ON for DMs
+const chatAiOn  = new Set(); // explicit per-chat ON  (overrides global OFF)
+const chatAiOff = new Set(); // explicit per-chat OFF (overrides global ON)
 
 const histories = new Map();
 
@@ -54,7 +64,6 @@ function pushHistory(jid, role, content) {
 
 // ── API call ───────────────────────────────────────────────────────────────────
 async function callAI(jid, userText) {
-  // Try Groq / OpenAI-compatible first if a key is configured
   if (config.AI_API_KEY) {
     pushHistory(jid, 'user', userText);
     try {
@@ -80,7 +89,6 @@ async function callAI(jid, userText) {
     }
   }
 
-  // Fall back to MEGA-MD free multi-API (no key required)
   const answer = await askFreeAI(userText);
   pushHistory(jid, 'assistant', answer);
   return answer;
@@ -94,15 +102,24 @@ function randInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+// ── Should AI reply to this message? ─────────────────────────────────────────
+//
+//  Priority (highest first):
+//   chatAiOff has jid → NO  (explicit exclusion beats everything)
+//   chatAiOn  has jid → YES (explicit inclusion beats global OFF)
+//   globalAiOn && isDM → YES
+//   else → NO
+//
+function isAiActive(jid, msg) {
+  if (chatAiOff.has(jid)) return false;   // explicit OFF wins
+  if (chatAiOn.has(jid))  return true;    // explicit ON wins
+  return globalAiOn && isDM(msg);         // fall back to global (DMs only)
+}
+
 // ── Auto-reply handler ─────────────────────────────────────────────────────────
 export async function handleAIReply(sock, msg) {
   const jid = msg.key.remoteJid;
-
-  const active =
-    (globalAiOn && !chatAiOff.has(jid) && isDM(msg)) ||
-    chatAiOn.has(jid);
-
-  if (!active) return;
+  if (!isAiActive(jid, msg)) return;
   if (msg.key.fromMe) return;
 
   const text = getMessageText(msg);
@@ -161,35 +178,63 @@ export async function handleAICommand(sock, msg, parsed) {
   const jid = msg.key.remoteJid;
 
   if (command === 'aionall') {
-    globalAiOn = true; chatAiOff.clear();
-    await reply(sock, msg, '🤖 *AI reply ON for all DM chats.*\nUse .aioff in any chat to exclude it.\n\n_Powered by free MEGA-MD APIs — no key needed._');
+    // Enable AI globally for all DMs.
+    // Clear chatAiOff so previously excluded chats are re-included.
+    // Keep chatAiOn — those overrides are harmless and a user might re-use them.
+    globalAiOn = true;
+    chatAiOff.clear();
+    await reply(sock, msg,
+      '🤖 *AI reply ON for all DMs.*\n' +
+      'Use `' + config.PREFIX + 'aioff` in any chat to exclude it.\n\n' +
+      '_Powered by free MEGA-MD APIs — no key needed._');
     return true;
   }
+
   if (command === 'aialloff') {
-    globalAiOn = false; chatAiOn.clear(); chatAiOff.clear();
-    await reply(sock, msg, '🔕 *AI reply OFF on all chats.*');
+    // Disable AI globally.
+    // Clear chatAiOn so previous per-chat inclusions don't linger.
+    // Do NOT clear chatAiOff — those exclusions are irrelevant while global is
+    // OFF, but keeping them means re-enabling with aionall can re-apply them
+    // correctly. More importantly, aion can still override individually.
+    globalAiOn = false;
+    chatAiOn.clear();
+    await reply(sock, msg,
+      '🔕 *AI reply OFF globally.*\n' +
+      'Use `' + config.PREFIX + 'aion` in a specific chat to re-enable it there.');
     return true;
   }
+
   if (command === 'aion') {
-    chatAiOff.delete(jid); chatAiOn.add(jid);
-    await reply(sock, msg, '🤖 *AI reply ON for this chat.*');
+    // Force AI ON for this chat, regardless of global state.
+    chatAiOff.delete(jid);
+    chatAiOn.add(jid);
+    await reply(sock, msg, '🤖 *AI reply ON for this chat.*\n_(overrides global setting)_');
     return true;
   }
+
   if (command === 'aioff') {
-    chatAiOn.delete(jid); chatAiOff.add(jid);
-    await reply(sock, msg, '🔕 *AI reply OFF for this chat.*');
+    // Force AI OFF for this chat, regardless of global state.
+    chatAiOn.delete(jid);
+    chatAiOff.add(jid);
+    await reply(sock, msg, '🔕 *AI reply OFF for this chat.*\n_(overrides global setting)_');
     return true;
   }
+
   if (command === 'aistatus') {
     const backend  = config.AI_API_KEY
       ? `✅ Groq key set (${config.AI_MODEL}) + free fallback`
       : '🆓 Free MEGA-MD APIs (no key needed)';
-    const status   = globalAiOn ? '🟢 ON (all DMs)' : '🔴 OFF globally';
-    const excluded = chatAiOff.size ? `\nExcluded: ${chatAiOff.size} chat(s)` : '';
-    const forced   = chatAiOn.size  ? `\nForced-on: ${chatAiOn.size} chat(s)` : '';
-    await reply(sock, msg, `🤖 *AI Status*\n${status}${excluded}${forced}\nBackend: ${backend}`);
+    const globalStatus = globalAiOn ? '🟢 ON (all DMs)' : '🔴 OFF globally';
+    const excluded = chatAiOff.size ? `\n🚫 Excluded chats: ${chatAiOff.size}` : '';
+    const forced   = chatAiOn.size  ? `\n✅ Force-on chats: ${chatAiOn.size}` : '';
+    await reply(sock, msg,
+      `🤖 *AI Status*\n` +
+      `Global: ${globalStatus}${excluded}${forced}\n` +
+      `Backend: ${backend}\n\n` +
+      `_Priority: per-chat aioff > per-chat aion > global_`);
     return true;
   }
+
   return false;
 }
 
