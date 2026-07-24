@@ -33,7 +33,7 @@ import { handleUpdate } from './plugins/update.js';
 import { handleAICommand, handleAIReply } from './plugins/ai.js';
 import { storeViewOnce, handleVV, handleAntiViewOnceCommand } from './plugins/antiviewonce.js';
 import { handleGetDp } from './plugins/getdp.js';
-import antidelete, { handleAntiDeleteCommand } from './plugins/antidelete.js';
+import antidelete, { handleAntiDeleteCommand, handleRevoke } from './plugins/antidelete.js';
 import antiedit, { handleAntiEditCommand, handleEditUpsert } from './plugins/antiedit.js';
 import autostatus, { handleAutoStatusCommand } from './plugins/autostatus.js';
 import { parseCommand, getMessageText, isOwner, reply } from './lib/utils.js';
@@ -212,6 +212,14 @@ async function connectToWhatsApp() {
         return;
       }
 
+      // Baileys 7.x: deletions arrive as protocolMessage type 0 (REVOKE) inside
+      // messages.upsert — this is MEGA-MD's detection approach and is more
+      // reliable than messages.update alone for DM + group deletions.
+      if (msg.message?.protocolMessage?.type === 0) {
+        await handleRevoke(sock, msg);
+        return;
+      }
+
       // Store for anti-delete / anti-edit
       antidelete.storeMessage(msg);
       antiedit.storeMessage(msg);
@@ -266,8 +274,8 @@ async function connectToWhatsApp() {
         if (await handleGetDp(sock, msg, parsed)) return;
       }
 
-      // ── AI auto-reply ─────────────────────────────────────────────────
-      if (config.AI_ENABLED) await handleAIReply(sock, msg);
+      // ── AI auto-reply (always attempted — free APIs need no key) ─────────
+      await handleAIReply(sock, msg);
 
     } catch (err) {
       console.error('[Message handler]', err.message);
@@ -349,7 +357,7 @@ async function sendStatus(sock, msg) {
     `✏️ Anti-Edit:      ${config.ANTI_EDIT      ? '🟢 ON' : '🔴 OFF'}\n` +
     `👁️ Anti View-Once: ${config.ANTI_VIEW_ONCE ? '🟢 ON' : '🔴 OFF'}\n` +
     `📺 Auto Status:    ${config.AUTO_STATUS_VIEW ? '🟢 ON' : '🔴 OFF'}\n` +
-    `🤖 AI Reply:       ${config.AI_ENABLED ? (config.AI_API_KEY ? '🟢 ON' : '⚠️ No API key') : '🔴 OFF'}\n` +
+    `🤖 AI Reply:       ${config.AI_API_KEY ? '🟢 ON (Groq + free fallback)' : '🟢 ON (free MEGA-MD APIs)'}\n` +
     `📝 Auto Bio:       ${config.AUTO_BIO ? '🟢 ON' : '🔴 OFF'}\n\n` +
     `_Use ${p}antidelete / ${p}antiedit / ${p}autostatus / ${p}antiviewonce / ${p}aionall to toggle_`;
   await reply(sock, msg, text);
@@ -372,24 +380,36 @@ async function sendHelp(sock, msg) {
     `▸ ${p}antiviewonce on/off — Save view-once media\n` +
     `▸ ${p}vv — Reveal saved view-once media\n` +
     `▸ ${p}autostatus on/off — Auto-view statuses\n\n` +
-    `*🤖 AI REPLY (owner toggles)*\n` +
-    `▸ ${p}aionall — AI ON for all DM chats\n` +
-    `▸ ${p}aialloff — AI OFF for all chats\n` +
-    `▸ ${p}aion — AI ON for this chat only\n` +
-    `▸ ${p}aioff — AI OFF for this chat only\n` +
-    `▸ ${p}aistatus — Show AI status\n\n` +
-    `*👤 PROFILE*\n` +
-    `▸ ${p}setbio <text> — Set your bio\n` +
-    `▸ ${p}autobio on/off — Auto gangster quotes bio\n` +
-    `▸ ${p}quotebio — Set random gangster quote as bio\n` +
+    `*🤖 AI (free — no key needed)*\n` +
+    `▸ ${p}ai <question> — Ask AI anything\n` +
+    `▸ ${p}ask / ${p}gpt — Aliases for .ai\n` +
+    `▸ ${p}aionall — AI auto-reply ON for all DMs 🔒\n` +
+    `▸ ${p}aialloff — AI auto-reply OFF globally 🔒\n` +
+    `▸ ${p}aion / ${p}aioff — Toggle for this chat 🔒\n` +
+    `▸ ${p}aistatus — Show AI backend & status 🔒\n\n` +
+    `*🛡️ PROTECTION (owner toggles 🔒)*\n` +
+    `▸ ${p}antidelete on/off — Forward deleted messages\n` +
+    `▸ ${p}antiedit on/off — Alert on edited messages\n` +
+    `▸ ${p}antiviewonce on/off — Save view-once media\n` +
+    `▸ ${p}vv — Reveal saved view-once (or reply to one)\n` +
+    `▸ ${p}autostatus on/off — Auto-view statuses\n` +
+    `▸ ${p}autostatus react on/off — React 💚 to statuses\n\n` +
+    `*👤 PROFILE (owner 🔒)*\n` +
+    `▸ ${p}setbio <text> — Set bio directly\n` +
+    `▸ ${p}setbio set <template> — Template with {quote}\n` +
+    `▸ ${p}autobio on/off — Rotate quote bio every 10 min\n` +
+    `▸ ${p}quotebio — Set a random live quote as bio\n` +
     `▸ ${p}setdp — Set profile pic (attach or reply to image)\n` +
     `▸ ${p}getdp @user — Get someone's profile pic\n\n` +
-    `*⚙️ SYSTEM*\n` +
+    `*📥 DOWNLOADER*\n` +
+    `▸ ${p}tiktok <url> — TikTok HD no-watermark video\n` +
+    `▸ ${p}tiktokaudio <url> — TikTok audio\n` +
+    `▸ ${p}shazam — Identify song (reply to audio or send audio)\n\n` +
+    `*⚙️ SYSTEM (owner 🔒)*\n` +
     `▸ ${p}status — Show all plugin on/off status\n` +
     `▸ ${p}update — Pull latest updates from GitHub\n` +
     `▸ ${p}restart — Restart bot (session preserved)\n` +
-    `▸ ${p}ping — Check if bot is alive\n\n` +
-    `_All toggle commands are owner-only 🔒_`;
+    `▸ ${p}ping — Check if bot is alive`;
 
   await reply(sock, msg, text);
 }
@@ -401,12 +421,10 @@ async function main() {
   console.log(chalk.green.bold('║  Starting up...                  ║'));
   console.log(chalk.green.bold('╚══════════════════════════════════╝\n'));
 
-  if (config.AI_ENABLED) {
-    printLog('success', `AI auto-reply is ON (model: ${config.AI_MODEL})`);
-  } else if (config.AI_API_KEY) {
-    printLog('warning', 'AI_API_KEY found but AI_ENABLED=false — AI is off');
+  if (config.AI_API_KEY) {
+    printLog('success', `AI: Groq key found (${config.AI_MODEL}) + free API fallback`);
   } else {
-    printLog('info', 'AI auto-reply is OFF (no AI_API_KEY set)');
+    printLog('success', 'AI: running on free MEGA-MD APIs (no key needed)');
   }
 
   startServer();

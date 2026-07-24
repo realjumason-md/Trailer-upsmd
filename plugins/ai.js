@@ -1,19 +1,44 @@
 /**
- * AI AUTO-REPLY — uses Groq (or any OpenAI-compatible API) to reply to DMs
+ * AI AUTO-REPLY — MEGA-MD free multi-API + optional Groq/OpenAI fallback
+ * Based on MEGA-MD's ai-gpt.js / ai-llama.js / ai-mistral.js
+ *
+ * Works WITHOUT any API key using three free GlobalTechInfo worker APIs.
+ * If AI_API_KEY / GROQ_API_KEY is set, Groq/OpenAI is tried first, then
+ * falls back to the free workers automatically.
  */
 
 import axios from 'axios';
 import config from '../config.js';
 import { isOwner, reply, getMessageText, isDM } from '../lib/utils.js';
 
+// ── Free worker APIs (MEGA-MD, no key required) ───────────────────────────────
+const FREE_APIS = [
+  (q) => `https://mistral.stacktoy.workers.dev/?apikey=Suhail&text=${encodeURIComponent(q)}`,
+  (q) => `https://llama.gtech-apiz.workers.dev/?apikey=Suhail&text=${encodeURIComponent(q)}`,
+  (q) => `https://mistral.gtech-apiz.workers.dev/?apikey=Suhail&text=${encodeURIComponent(q)}`,
+];
+
+async function askFreeAI(query) {
+  for (const apiUrl of FREE_APIS) {
+    try {
+      const { data } = await axios.get(apiUrl(query), { timeout: 15000 });
+      const response = data?.data?.response;
+      if (response && typeof response === 'string' && response.trim()) {
+        return response.trim();
+      }
+    } catch {
+      continue;
+    }
+  }
+  throw new Error('All free AI APIs failed');
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
-// globalAiOn starts TRUE when AI is enabled so it works immediately without
-// needing to send .aionall first.
-let globalAiOn = config.AI_ENABLED;
+// AI is ON by default — works without any key via free APIs
+let globalAiOn = true;
 const chatAiOn  = new Set();
 const chatAiOff = new Set();
 
-// Per-chat conversation history (max 20 turns each)
 const histories = new Map();
 
 function getHistory(jid) {
@@ -24,38 +49,41 @@ function getHistory(jid) {
 function pushHistory(jid, role, content) {
   const h = getHistory(jid);
   h.push({ role, content });
-  if (h.length > 40) h.splice(0, 2); // drop oldest pair
+  if (h.length > 40) h.splice(0, 2);
 }
 
 // ── API call ───────────────────────────────────────────────────────────────────
 async function callAI(jid, userText) {
-  if (!config.AI_ENABLED || !config.AI_API_KEY) return null;
-
-  pushHistory(jid, 'user', userText);
-
-  try {
-    const { data } = await axios.post(
-      `${config.AI_BASE_URL}/chat/completions`,
-      {
-        model:    config.AI_MODEL,
-        messages: [
-          { role: 'system', content: config.AI_SYSTEM_PROMPT },
-          ...getHistory(jid),
-        ],
-        max_tokens: 500,
-      },
-      {
-        headers: { Authorization: `Bearer ${config.AI_API_KEY}` },
-        timeout: 30000,
-      }
-    );
-    const reply_ = data.choices?.[0]?.message?.content?.trim();
-    if (reply_) pushHistory(jid, 'assistant', reply_);
-    return reply_ || null;
-  } catch (err) {
-    console.error('[AI]', err.message);
-    return null;
+  // Try Groq / OpenAI-compatible first if a key is configured
+  if (config.AI_API_KEY) {
+    pushHistory(jid, 'user', userText);
+    try {
+      const { data } = await axios.post(
+        `${config.AI_BASE_URL}/chat/completions`,
+        {
+          model:    config.AI_MODEL,
+          messages: [
+            { role: 'system', content: config.AI_SYSTEM_PROMPT },
+            ...getHistory(jid),
+          ],
+          max_tokens: 500,
+        },
+        {
+          headers: { Authorization: `Bearer ${config.AI_API_KEY}` },
+          timeout: 30000,
+        }
+      );
+      const text = data.choices?.[0]?.message?.content?.trim();
+      if (text) { pushHistory(jid, 'assistant', text); return text; }
+    } catch (err) {
+      console.error('[AI] Groq failed, switching to free APIs:', err.message);
+    }
   }
+
+  // Fall back to MEGA-MD free multi-API (no key required)
+  const answer = await askFreeAI(userText);
+  pushHistory(jid, 'assistant', answer);
+  return answer;
 }
 
 function typingDelay(text) {
@@ -68,8 +96,6 @@ function randInt(min, max) {
 
 // ── Auto-reply handler ─────────────────────────────────────────────────────────
 export async function handleAIReply(sock, msg) {
-  if (!config.AI_ENABLED) return;
-
   const jid = msg.key.remoteJid;
 
   const active =
@@ -83,6 +109,7 @@ export async function handleAIReply(sock, msg) {
   if (!text) return;
 
   try {
+    await sock.sendMessage(jid, { react: { text: '🤖', key: msg.key } });
     await sock.sendPresenceUpdate('available', jid);
     await new Promise(r => setTimeout(r, randInt(200, 500)));
     await sock.sendPresenceUpdate('composing', jid);
@@ -105,14 +132,37 @@ export async function handleAIReply(sock, msg) {
 // ── Command handler ────────────────────────────────────────────────────────────
 export async function handleAICommand(sock, msg, parsed) {
   const { command } = parsed;
-  if (!['aionall', 'aialloff', 'aion', 'aioff', 'aistatus'].includes(command)) return false;
+
+  const toggleCmds = ['aionall', 'aialloff', 'aion', 'aioff', 'aistatus'];
+  const queryCmds  = ['ai', 'ask', 'gpt'];
+  if (![...toggleCmds, ...queryCmds].includes(command)) return false;
+
+  // ── Direct AI query (anyone can use) ──────────────────────────────────────
+  if (queryCmds.includes(command)) {
+    const query = parsed.body.trim();
+    if (!query) {
+      await reply(sock, msg, `🤖 *AI Assistant*\n\nUsage: ${config.PREFIX}${command} <question>\nExample: ${config.PREFIX}${command} explain black holes`);
+      return true;
+    }
+    const jid = msg.key.remoteJid;
+    try {
+      await sock.sendMessage(jid, { react: { text: '🤖', key: msg.key } });
+      const answer = await callAI(jid, query);
+      await reply(sock, msg, answer);
+    } catch (err) {
+      await reply(sock, msg, `❌ AI failed: ${err.message}`);
+    }
+    return true;
+  }
+
+  // ── Toggle commands (owner only) ──────────────────────────────────────────
   if (!isOwner(msg)) { await reply(sock, msg, '🔒 Owner only.'); return true; }
 
   const jid = msg.key.remoteJid;
 
   if (command === 'aionall') {
     globalAiOn = true; chatAiOff.clear();
-    await reply(sock, msg, '🤖 *AI reply ON for all DM chats.*\nUse .aioff in any chat to exclude it.');
+    await reply(sock, msg, '🤖 *AI reply ON for all DM chats.*\nUse .aioff in any chat to exclude it.\n\n_Powered by free MEGA-MD APIs — no key needed._');
     return true;
   }
   if (command === 'aialloff') {
@@ -131,10 +181,13 @@ export async function handleAICommand(sock, msg, parsed) {
     return true;
   }
   if (command === 'aistatus') {
-    const status = globalAiOn ? '🟢 ON (all DMs)' : '🔴 OFF globally';
-    const exceptions = chatAiOff.size ? `\nExcluded chats: ${chatAiOff.size}` : '';
-    const overrides  = chatAiOn.size  ? `\nForced-on chats: ${chatAiOn.size}` : '';
-    await reply(sock, msg, `🤖 *AI Status*\n${status}${exceptions}${overrides}\nKey: ${config.AI_API_KEY ? '✅ set' : '❌ missing'}`);
+    const backend  = config.AI_API_KEY
+      ? `✅ Groq key set (${config.AI_MODEL}) + free fallback`
+      : '🆓 Free MEGA-MD APIs (no key needed)';
+    const status   = globalAiOn ? '🟢 ON (all DMs)' : '🔴 OFF globally';
+    const excluded = chatAiOff.size ? `\nExcluded: ${chatAiOff.size} chat(s)` : '';
+    const forced   = chatAiOn.size  ? `\nForced-on: ${chatAiOn.size} chat(s)` : '';
+    await reply(sock, msg, `🤖 *AI Status*\n${status}${excluded}${forced}\nBackend: ${backend}`);
     return true;
   }
   return false;
